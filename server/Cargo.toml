@@ -1,0 +1,33 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.37.0", features = ["full"] }
+axum = { version = "0.7.5", features = ["tracing"] }
+axum-macros = "0.4.1"
+tower-http = { version = "0.5.0", features = ["trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.24.0"
+rusqlite = { version = "0.31.0", features = ["bundled", "chrono"] }
+rusqlite_migration = { version = "1.2.0", features = ["from-directory"] }
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.115"
+anyhow = "1.0.82"
+thiserror = "1.0.58"
+include_dir = "0.7.3"
+lazy_static = "1.4.0"
+chrono = "0.4.38"
+indoc = "2"
+secular = "1.0.1"
+regex = "1.10.4"
+rand = "0.8.5"
+ttl_cache = "0.5.1"
+sha2 = "0.10.8"
+hex = "0.4.3"
+collapse = "0.1.2"
+reqwest = { version = "0.12.4", features = ["json", "cookies", "rustls-tls", "charset", "http2"], default-features = false }
+uuid = { version = "1.8.0", features = ["v4"] }

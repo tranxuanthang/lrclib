@@ -1,0 +1,12 @@
+[package]
+name = "lrclib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+server = { path = "./server" }
+clap = { version = "4.5.4", features = ["derive"] }
+tokio = { version = "1.37.0", features = ["full"] }
+
+[workspace]
+members = ["server"]
