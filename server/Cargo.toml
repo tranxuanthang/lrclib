@@ -22,7 +22,7 @@ include_dir = "0.7.3"
 lazy_static = "1.4.0"
 chrono = "0.4.38"
 indoc = "2"
-secular = "1.0.1"
+secular = { version="1.0.1", features=["bmp", "normalization"] }
 regex = "1.10.4"
 rand = "0.8.5"
 ttl_cache = "0.5.1"
