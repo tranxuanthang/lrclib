@@ -51,16 +51,15 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
         duration: params.duration,
       };
 
-      let is_queued_recently = {
+      {
         let mut cache_lock = state.cache.lock().await;
-        let is_queued_recently = cache_lock.contains_key(&format!("missing_track:{}", missing_track));
-        cache_lock.insert(format!("missing_track:{}", missing_track), "1".to_owned(), Duration::from_secs(60 * 5));
-        is_queued_recently
-      };
-
-      if !is_queued_recently {
         let mut queue_lock = state.queue.lock().await;
-        send_to_queue(missing_track, &mut *queue_lock).await;
+        let is_queued_recently = cache_lock.contains_key(&format!("missing_track:{}", missing_track));
+
+        if !is_queued_recently {
+          cache_lock.insert(format!("missing_track:{}", missing_track), "1".to_owned(), Duration::from_secs(60 * 5));
+          send_to_queue(missing_track, &mut *queue_lock).await;
+        }
       }
 
       Err(ApiError::TrackNotFoundError)

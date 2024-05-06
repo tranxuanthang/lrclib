@@ -1,10 +1,16 @@
 use axum::{
+  http::{
+    header::CONTENT_TYPE,
+    Request,
+  },
+  body::Body,
+  response::Response,
   routing::{get, post},
   Router,
-  http::header::CONTENT_TYPE,
 };
 use entities::missing_track::MissingTrack;
-use std::{collections::VecDeque, path::PathBuf};
+use tracing_subscriber::EnvFilter;
+use std::{collections::VecDeque, path::PathBuf, time::Duration};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use routes::{
@@ -17,10 +23,9 @@ use routes::{
 use std::sync::Arc;
 use db::init_db;
 use tower_http::{
-  trace::{self, TraceLayer},
-  cors::{CorsLayer, Any},
+  cors::{Any, CorsLayer}, trace::{self, TraceLayer}
 };
-use tracing::Level;
+use tracing::Span;
 use ttl_cache::TtlCache;
 use tokio::sync::Mutex;
 use tokio::signal;
@@ -43,8 +48,8 @@ pub struct AppState {
 
 pub async fn serve(port: u16, database: &PathBuf) {
   tracing_subscriber::fmt()
-    .with_target(false)
-    .json()
+    .compact()
+    .with_env_filter(EnvFilter::from_env("LRCLIB_LOG"))
     .init();
 
   let pool = init_db(database).expect("Cannot initialize connection to SQLite database!");
@@ -71,8 +76,28 @@ pub async fn serve(port: u16, database: &PathBuf) {
     .with_state(state)
     .layer(
       TraceLayer::new_for_http()
-        .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
-        .on_response(trace::DefaultOnResponse::new().level(Level::INFO))
+        .make_span_with(|request: &Request<Body>| {
+          let headers = request.headers();
+          let user_agent = headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+          let method = request.method().to_string();
+          let uri = request.uri().to_string();
+
+          tracing::info_span!("request", method, uri, user_agent)
+        })
+        .on_response(|response: &Response, latency: Duration, _span: &Span| {
+          let status_code = response.status().as_u16();
+          let latency = latency.as_millis();
+
+          tracing::info!(
+            message = "finished processing request",
+            latency = latency,
+            status_code = status_code,
+          )
+        })
+        .on_failure(trace::DefaultOnFailure::new().level(tracing::Level::ERROR))
     )
     .layer(
       CorsLayer::new()
@@ -84,7 +109,7 @@ pub async fn serve(port: u16, database: &PathBuf) {
   start_queue(state_clone).await;
 
   let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
-  tracing::info!("Listening on {}...", listener.local_addr().unwrap());
+  println!("LRCLIB server is listening on {}!", listener.local_addr().unwrap());
   axum::serve(listener, app)
     .with_graceful_shutdown(shutdown_signal())
     .await

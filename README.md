@@ -1,4 +1,6 @@
-### LRCLIB
+# LRCLIB
+
+## Introduction
 
 LRCLIB server written in Rust with Axum and SQLite3 database.
 
@@ -21,6 +23,8 @@ Server will be available at http://0.0.0.0:3300
 
 ## Setup with Podman/Docker
 
+### Basic
+
 Build the image:
 
 ```
@@ -34,6 +38,14 @@ podman run --rm -it -d -v lrclib-data:/data -p 3300:3300 --name lrclib-rs lrclib
 ```
 
 Server will be available at http://0.0.0.0:3300
+
+### Access the SQLite database
+
+Run the following command to directly interact with the database in command line:
+
+```
+podman run --rm -it -v lrclib-data:/data lrclib-rs:latest sqlite3 /data/db.sqlite3
+```
 
 ### Quadlet
 

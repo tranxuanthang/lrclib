@@ -36,7 +36,7 @@ pub async fn start_queue(state: Arc<AppState>) {
             process_lyrics_result(&missing_track, data, &mut conn).await;
           },
           Err(err) => tracing::error!(
-            message = format!("Error while finding lyrics for {}!", missing_track.name),
+            message = format!("error while finding lyrics"),
             track_name = missing_track.name,
             artist_name = missing_track.artist_name,
             album_name = missing_track.album_name,
@@ -56,7 +56,7 @@ async fn process_lyrics_result(missing_track: &MissingTrack, data: Option<Scrape
   if let Some(data) = data {
     match add_found(missing_track, &data, conn).await {
       Ok(_) => tracing::info!(
-        message = format!("Lyrics for {} is added!", missing_track.name),
+        message = format!("added new lyrics"),
         track_name = missing_track.name,
         artist_name = missing_track.artist_name,
         album_name = missing_track.album_name,
@@ -64,7 +64,7 @@ async fn process_lyrics_result(missing_track: &MissingTrack, data: Option<Scrape
         queue = true,
       ),
       Err(err) => tracing::error!(
-        message = format!("Failed to save lyrics for {}!", missing_track.name),
+        message = format!("failed to save lyrics"),
         track_name = missing_track.name,
         artist_name = missing_track.artist_name,
         album_name = missing_track.album_name,
@@ -75,7 +75,7 @@ async fn process_lyrics_result(missing_track: &MissingTrack, data: Option<Scrape
     }
   } else {
     tracing::info!(
-      message = format!("No lyrics found for {}!", missing_track.name),
+      message = format!("no lyrics found"),
       track_name = missing_track.name,
       artist_name = missing_track.artist_name,
       album_name = missing_track.album_name,

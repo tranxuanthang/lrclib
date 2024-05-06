@@ -9,7 +9,7 @@ axum = { version = "0.7.5", features = ["tracing"] }
 axum-macros = "0.4.1"
 tower-http = { version = "0.5.0", features = ["trace", "cors"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.24.0"
 rusqlite = { version = "0.31.0", features = ["bundled", "chrono"] }
