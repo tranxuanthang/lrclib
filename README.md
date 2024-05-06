@@ -16,7 +16,7 @@ cargo build --release
 Run the server:
 
 ```
-cargo run --release -- serve --database db.sqlite3
+LRCLIB_LOG=info cargo run --release -- serve --database db.sqlite3
 ```
 
 Server will be available at http://0.0.0.0:3300
@@ -34,7 +34,7 @@ podman build -t lrclib-rs:latest -f Dockerfile .
 Run the container:
 
 ```
-podman run --rm -it -d -v lrclib-data:/data -p 3300:3300 --name lrclib-rs lrclib-rs:latest
+podman run --rm -it -d -v lrclib-data:/data -p 3300:3300 -e LRCLIB_LOG=info --name lrclib-rs lrclib-rs:latest
 ```
 
 Server will be available at http://0.0.0.0:3300
@@ -66,6 +66,7 @@ Image=lrclib-rs:latest
 PublishPort=3300:3300
 Volume=lrclib-data:/data
 ContainerName=lrclib-rs
+Environment=LRCLIB_LOG=info
 
 [Service]
 Restart=always
@@ -90,4 +91,10 @@ Check the status to see if `lrclib.service` is actually running:
 
 ```
 systemctl --user status lrclib.service
+```
+
+Restart when the container image is updated:
+
+```
+systemctl --user restart lrclib.service
 ```

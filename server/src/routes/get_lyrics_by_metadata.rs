@@ -98,7 +98,7 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
 
 async fn send_to_queue(missing_track: MissingTrack, queue: &mut VecDeque<MissingTrack>) {
   tracing::info!(
-    message = format!("Sending missing track {} to queue...", missing_track.name),
+    message = format!("sending missing track to queue"),
     track_name = missing_track.name,
     artist_name = missing_track.artist_name,
     album_name = missing_track.album_name,
