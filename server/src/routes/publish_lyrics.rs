@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use ttl_cache::TtlCache;
 use std::sync::Arc;
-use crate::{errors::ApiError, repositories::{lyrics_repository, track_repository}, AppState};
+use crate::{errors::ApiError, repositories::{lyrics_repository, track_repository}, utils::strip_timestamp, AppState};
 use sha2::{Digest, Sha256};
 use hex;
 use axum_macros::debug_handler;
@@ -77,8 +77,13 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<()>
     )?
   };
 
-  let plain_lyrics = payload.plain_lyrics.as_ref().filter(|s| !s.is_empty()).map(|s| s.to_owned());
+  let mut plain_lyrics = payload.plain_lyrics.as_ref().filter(|s| !s.is_empty()).map(|s| s.to_owned());
   let synced_lyrics = payload.synced_lyrics.as_ref().filter(|s| !s.is_empty()).map(|s| s.to_owned());
+
+  // Generate plain_lyrics from synced_lyrics
+  if plain_lyrics.is_none() && synced_lyrics.is_some() {
+    plain_lyrics = Some(strip_timestamp(synced_lyrics.as_deref().unwrap()));
+  }
 
   if plain_lyrics.is_some() {
     lyrics_repository::add_one_tx(
@@ -90,6 +95,7 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<()>
       &mut tx,
     )?;
   } else {
+    // Mark the track as instrumental
     lyrics_repository::add_one_tx(
       &None,
       &None,
