@@ -46,7 +46,7 @@ pub struct AppState {
   queue: Mutex<VecDeque<MissingTrack>>,
 }
 
-pub async fn serve(port: u16, database: &PathBuf) {
+pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
   tracing_subscriber::fmt()
     .compact()
     .with_env_filter(EnvFilter::from_env("LRCLIB_LOG"))
@@ -106,7 +106,7 @@ pub async fn serve(port: u16, database: &PathBuf) {
         .allow_headers([CONTENT_TYPE])
     );
 
-  start_queue(state_clone).await;
+  start_queue(workers_count, state_clone).await;
 
   let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
   println!("LRCLIB server is listening on {}!", listener.local_addr().unwrap());

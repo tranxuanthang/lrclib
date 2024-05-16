@@ -13,43 +13,57 @@ pub struct ScrapedData {
   pub instrumental: bool,
 }
 
-pub async fn start_queue(state: Arc<AppState>) {
-  tokio::spawn(async move {
-    let mut provider = NoopProvider::new();
-    loop {
-      let maybe_missing_track = {
-        let mut queue_lock = state.queue.lock().await;
-        queue_lock.pop_front()
-      };
+pub async fn start_queue(workers_count: u8, state: Arc<AppState>) {
+  for _ in 0..workers_count {
+    let state_clone = Arc::clone(&state);
 
-      if let Some(missing_track) = maybe_missing_track {
-        let maybe_data = provider.retrieve_lyrics(
-          &missing_track.name,
-          &missing_track.artist_name,
-          &missing_track.album_name,
-          missing_track.duration,
-        ).await;
+    tokio::spawn(async move {
+      worker(state_clone).await;
+    });
+  }
+}
 
-        match maybe_data {
-          Ok(data) => {
-            let mut conn = state.pool.get().unwrap();
-            process_lyrics_result(&missing_track, data, &mut conn).await;
-          },
-          Err(err) => tracing::error!(
-            message = format!("error while finding lyrics"),
-            track_name = missing_track.name,
-            artist_name = missing_track.artist_name,
-            album_name = missing_track.album_name,
-            duration = missing_track.duration,
-            error = err.to_string(),
-            queue = true,
-          ),
-        }
-      } else {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-      }
+async fn worker(state: Arc<AppState>) {
+  let mut provider = NoopProvider::new();
+  loop {
+    let maybe_missing_track = get_next_track(&state).await;
+
+    if let Some(missing_track) = maybe_missing_track {
+      process_track(&state, &mut provider, missing_track).await;
+    } else {
+      tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-  });
+  }
+}
+
+async fn get_next_track(state: &Arc<AppState>) -> Option<MissingTrack> {
+  let mut queue_lock = state.queue.lock().await;
+  queue_lock.pop_front()
+}
+
+async fn process_track(state: &Arc<AppState>, provider: &mut NoopProvider, missing_track: MissingTrack) {
+  let maybe_data = provider.retrieve_lyrics(
+    &missing_track.name,
+    &missing_track.artist_name,
+    &missing_track.album_name,
+    missing_track.duration,
+  ).await;
+
+  match maybe_data {
+    Ok(data) => {
+      let mut conn = state.pool.get().unwrap();
+      process_lyrics_result(&missing_track, data, &mut conn).await;
+    },
+    Err(err) => tracing::error!(
+      message = format!("error while finding lyrics"),
+      track_name = missing_track.name,
+      artist_name = missing_track.artist_name,
+      album_name = missing_track.album_name,
+      duration = missing_track.duration,
+      error = err.to_string(),
+      queue = true,
+    ),
+  }
 }
 
 async fn process_lyrics_result(missing_track: &MissingTrack, data: Option<ScrapedData>, conn: &mut Connection) {
