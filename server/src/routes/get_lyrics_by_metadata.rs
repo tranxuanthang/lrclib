@@ -3,12 +3,17 @@ use serde::{Deserialize,Serialize};
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 use crate::{entities::{missing_track::MissingTrack, track::SimpleTrack}, errors::ApiError, repositories::track_repository::get_track_by_metadata, AppState};
 use axum_macros::debug_handler;
+use validator::Validate;
 
-#[derive(Deserialize)]
+#[derive(Validate, Deserialize)]
 pub struct QueryParams {
+  #[validate(length(min = 1, message = "cannot be empty"))]
   track_name: String,
+  #[validate(length(min = 1, message = "cannot be empty"))]
   artist_name: String,
+  #[validate(length(min = 1, message = "cannot be empty"))]
   album_name: String,
+  #[validate(range(min = 1.0, max = 3600.0, message = "must be between 1 and 3600"))]
   duration: f64,
 }
 
@@ -28,6 +33,8 @@ pub struct TrackResponse {
 
 #[debug_handler]
 pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<AppState>>) -> Result<Json<TrackResponse>, ApiError> {
+  params.validate().map_err(|e| ApiError::ValidationError(e.to_string()))?;
+
   let maybe_track = {
     let mut conn = state.pool.get()?;
     get_track_by_metadata(
@@ -57,7 +64,7 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
         let is_queued_recently = cache_lock.contains_key(&format!("missing_track:{}", missing_track));
 
         if !is_queued_recently {
-          cache_lock.insert(format!("missing_track:{}", missing_track), "1".to_owned(), Duration::from_secs(60 * 5));
+          cache_lock.insert(format!("missing_track:{}", missing_track), "1".to_owned(), Duration::from_secs(60 * 60 * 24));
           send_to_queue(missing_track, &mut *queue_lock).await;
         }
       }

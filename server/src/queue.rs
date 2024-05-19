@@ -14,6 +14,11 @@ pub struct ScrapedData {
 }
 
 pub async fn start_queue(workers_count: u8, state: Arc<AppState>) {
+  // Do not start queue if the workers_count is equal or smaller than zero
+  if workers_count <= 0 {
+    return
+  }
+
   for _ in 0..workers_count {
     let state_clone = Arc::clone(&state);
 

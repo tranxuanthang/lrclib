@@ -57,7 +57,7 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
   let state = Arc::new(
     AppState {
       pool,
-      cache: TtlCache::<String, String>::new(1000).into(),
+      cache: TtlCache::<String, String>::new(500000).into(),
       queue: VecDeque::new().into(),
     }
   );
@@ -85,13 +85,13 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
           let method = request.method().to_string();
           let uri = request.uri().to_string();
 
-          tracing::info_span!("request", method, uri, user_agent)
+          tracing::debug_span!("request", method, uri, user_agent)
         })
         .on_response(|response: &Response, latency: Duration, _span: &Span| {
           let status_code = response.status().as_u16();
           let latency = latency.as_millis();
 
-          tracing::info!(
+          tracing::debug!(
             message = "finished processing request",
             latency = latency,
             status_code = status_code,
@@ -106,7 +106,9 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
         .allow_headers([CONTENT_TYPE])
     );
 
-  start_queue(workers_count, state_clone).await;
+  tokio::spawn(async move {
+    start_queue(workers_count, state_clone).await;
+  });
 
   let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
   println!("LRCLIB server is listening on {}!", listener.local_addr().unwrap());

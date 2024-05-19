@@ -14,7 +14,7 @@ enum Commands {
   /// Start the LRCLIB server
   Serve {
     /// The port you want the server to bind to
-    #[arg(short, long, value_name = "PORT")]
+    #[arg(short, long, value_name = "PORT", default_value_t = 3300)]
     port: u16,
 
     /// Path to the database file
@@ -22,7 +22,7 @@ enum Commands {
     database: PathBuf,
 
     /// The number of queue processing workers
-    #[arg(short, long, value_name = "WORKERS_COUNT")]
+    #[arg(short, long, value_name = "WORKERS_COUNT", default_value_t = 0)]
     workers_count: u8,
   },
 }
