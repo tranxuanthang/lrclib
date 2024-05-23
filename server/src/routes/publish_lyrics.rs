@@ -15,6 +15,7 @@ use crate::{errors::ApiError, repositories::{lyrics_repository, track_repository
 use sha2::{Digest, Sha256};
 use hex;
 use axum_macros::debug_handler;
+use regex::Regex;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -85,22 +86,26 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<()>
     plain_lyrics = Some(strip_timestamp(synced_lyrics.as_deref().unwrap()));
   }
 
-  if plain_lyrics.is_some() {
-    lyrics_repository::add_one_tx(
-      &plain_lyrics,
-      &synced_lyrics,
-      track_id,
-      false,
-      &Some("lrclib".to_owned()),
-      &mut tx,
-    )?;
-  } else {
+  // Create a regex to match "[au: instrumental]" or "[au:instrumental]"
+  let re = Regex::new(r"\[au:\s*instrumental\]").expect("Invalid regex");
+  let is_instrumental = synced_lyrics.as_ref().map_or(false, |lyrics| re.is_match(lyrics));
+
+  if is_instrumental || plain_lyrics.is_none() {
     // Mark the track as instrumental
     lyrics_repository::add_one_tx(
       &None,
       &None,
       track_id,
       true,
+      &Some("lrclib".to_owned()),
+      &mut tx,
+    )?;
+  } else {
+    lyrics_repository::add_one_tx(
+      &plain_lyrics,
+      &synced_lyrics,
+      track_id,
+      false,
       &Some("lrclib".to_owned()),
       &mut tx,
     )?;
