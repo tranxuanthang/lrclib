@@ -98,3 +98,37 @@ Restart when the container image is updated:
 ```
 systemctl --user restart lrclib.service
 ```
+
+## Donation
+
+Toss a coin to your developer?
+
+**GitHub Sponsors (Recommended - 100% of your support goes to the developer):**
+
+https://github.com/sponsors/tranxuanthang
+
+**Buy Me a Coffee:**
+
+https://www.buymeacoffee.com/thangtran
+
+**Paypal:**
+
+https://paypal.me/tranxuanthang98
+
+**Monero (XMR):**
+
+```
+43ZN5qDdGQhPGthFnngD8rjCHYLsEFBcyJjDC1GPZzVxWSfT8R48QCLNGyy6Z9LvatF5j8kSgv23DgJpixJg8bnmMnKm3b7
+```
+
+**Litecoin (LTC):**
+
+```
+ltc1q7texq5qsp59gclqlwf6asrqmhm98gruvz94a48
+```
+
+## Contact
+
+If you prefer to contact by email:
+
+[hoangtudevops@protonmail.com](mailto:hoangtudevops@protonmail.com)
