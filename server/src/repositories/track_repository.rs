@@ -185,29 +185,32 @@ pub fn get_tracks_by_keyword(
   }
 
   let query = indoc! {"
-    SELECT
-      tracks.id,
-      tracks.name,
-      tracks.artist_name,
-      tracks.album_name,
-      tracks.duration,
-      lyrics.instrumental,
-      lyrics.plain_lyrics,
-      lyrics.synced_lyrics
-    FROM
-      tracks
-      LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
-    WHERE
-      tracks.id IN (
-        SELECT
-          rowid
-        FROM
-          tracks_fts
-        WHERE
-          tracks_fts MATCH ?
-        ORDER BY rank
-        LIMIT 20
-      )
+  SELECT
+    tracks.id,
+    tracks.name,
+    tracks.artist_name,
+    tracks.album_name,
+    tracks.duration,
+    lyrics.instrumental,
+    lyrics.plain_lyrics,
+    lyrics.synced_lyrics,
+    search_results.rank AS rank
+  FROM
+    (
+      SELECT
+        rank,
+        rowid
+      FROM
+        tracks_fts
+      WHERE
+        tracks_fts MATCH ?
+    ) AS search_results
+    JOIN tracks ON search_results.rowid = tracks.id
+    LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
+  ORDER BY
+    rank
+  LIMIT
+    20;
   "};
   let mut statement = conn.prepare(query)?;
   let fts_query = match q {
