@@ -205,8 +205,9 @@ pub fn get_tracks_by_keyword(
           tracks_fts
         WHERE
           tracks_fts MATCH ?
+        ORDER BY rank
+        LIMIT 20
       )
-    LIMIT 20
   "};
   let mut statement = conn.prepare(query)?;
   let fts_query = match q {
