@@ -204,13 +204,13 @@ pub fn get_tracks_by_keyword(
         tracks_fts
       WHERE
         tracks_fts MATCH ?
+      ORDER BY
+        rank
+      LIMIT
+        20
     ) AS search_results
-    JOIN tracks ON search_results.rowid = tracks.id
+    LEFT JOIN tracks ON search_results.rowid = tracks.id
     LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
-  ORDER BY
-    rank
-  LIMIT
-    20;
   "};
   let mut statement = conn.prepare(query)?;
   let fts_query = match q {
