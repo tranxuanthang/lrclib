@@ -79,8 +79,10 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
         .make_span_with(|request: &Request<Body>| {
           let headers = request.headers();
           let user_agent = headers
-            .get(header::USER_AGENT)
+            .get("Lrclib-Client")
             .and_then(|value| value.to_str().ok())
+            .or_else(|| headers.get("X-User-Agent").and_then(|value| value.to_str().ok()))
+            .or_else(|| headers.get(header::USER_AGENT).and_then(|value| value.to_str().ok()))
             .unwrap_or("");
           let method = request.method().to_string();
           let uri = request.uri().to_string();
