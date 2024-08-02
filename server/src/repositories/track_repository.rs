@@ -174,11 +174,6 @@ pub fn get_tracks_by_keyword(
   album_name: &Option<String>,
   conn: &mut Connection,
 ) -> Result<Vec<SimpleTrack>> {
-  let q = q.as_ref().map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
-  let track_name = track_name.as_ref().map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
-  let artist_name = artist_name.as_ref().map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
-  let album_name = album_name.as_ref().map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
-
   // To search track by keyword, at least q or track_name must be present
   if q.is_none() && track_name.is_none() {
     return Ok(vec![])

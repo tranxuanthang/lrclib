@@ -1,7 +1,7 @@
 use axum::{extract::State, Json};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 use crate::{errors::ApiError, AppState};
 
 #[derive(Serialize)]
@@ -16,10 +16,7 @@ pub async fn route(
 ) -> Result<Json<Challenge>, ApiError> {
   let challenge = generate_challenge();
 
-  {
-    let mut cache_lock = state.cache.lock().await;
-    cache_lock.insert(format!("challenge:{}", challenge.prefix), challenge.target.to_owned(), Duration::from_secs(60 * 5));
-  }
+  state.challenge_cache.insert(format!("challenge:{}", challenge.prefix), challenge.target.to_owned()).await;
 
   Ok(Json(challenge))
 }

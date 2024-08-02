@@ -26,7 +26,7 @@ use tower_http::{
   cors::{Any, CorsLayer}, trace::{self, TraceLayer}
 };
 use tracing::Span;
-use ttl_cache::TtlCache;
+use moka::future::Cache;
 use tokio::sync::Mutex;
 use tokio::signal;
 use queue::start_queue;
@@ -42,7 +42,9 @@ pub mod providers;
 
 pub struct AppState {
   pool: Pool<SqliteConnectionManager>,
-  cache: Mutex<TtlCache<String, String>>,
+  challenge_cache: Cache<String, String>,
+  get_cache: Cache<String, String>,
+  search_cache: Cache<String, String>,
   queue: Mutex<VecDeque<MissingTrack>>,
 }
 
@@ -57,7 +59,18 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
   let state = Arc::new(
     AppState {
       pool,
-      cache: TtlCache::<String, String>::new(500000).into(),
+      challenge_cache: Cache::<String, String>::builder()
+        .time_to_live(Duration::from_secs(60 * 5))
+        .max_capacity(500000)
+        .build(),
+      get_cache: Cache::<String, String>::builder()
+        .time_to_live(Duration::from_secs(60 * 60 * 72))
+        .max_capacity(500000)
+        .build(),
+      search_cache: Cache::<String, String>::builder()
+        .time_to_live(Duration::from_secs(60 * 60 * 24))
+        .max_capacity(2000000)
+        .build(),
       queue: VecDeque::new().into(),
     }
   );

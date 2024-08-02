@@ -9,7 +9,7 @@ use axum::{
 };
 use rusqlite::Connection;
 use serde::Deserialize;
-use ttl_cache::TtlCache;
+use moka::future::Cache;
 use std::sync::Arc;
 use crate::{errors::ApiError, repositories::{lyrics_repository, track_repository}, utils::strip_timestamp, AppState};
 use sha2::{Digest, Sha256};
@@ -36,10 +36,7 @@ pub async fn route(
 ) -> Result<StatusCode, ApiError> {
   match headers.get("X-Publish-Token") {
     Some(publish_token) => {
-      let is_valid = {
-        let mut cache_lock = state.cache.lock().await;
-        is_valid_publish_token(publish_token.to_str()?, &mut *cache_lock)
-      };
+      let is_valid = is_valid_publish_token(publish_token.to_str()?, &state.challenge_cache).await;
 
       if is_valid {
         {
@@ -116,7 +113,7 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<()>
   Ok(())
 }
 
-fn is_valid_publish_token(publish_token: &str, cache: &mut TtlCache<String, String>) -> bool {
+async fn is_valid_publish_token(publish_token: &str, challenge_cache: &Cache<String, String>) -> bool {
   let publish_token_parts = publish_token.split(":").collect::<Vec<&str>>();
 
   if publish_token_parts.len() != 2 {
@@ -125,14 +122,14 @@ fn is_valid_publish_token(publish_token: &str, cache: &mut TtlCache<String, Stri
 
   let prefix = publish_token_parts[0];
   let nonce = publish_token_parts[1];
-  let target = cache.get(&format!("challenge:{}", prefix));
+  let target = challenge_cache.get(&format!("challenge:{}", prefix)).await;
 
   match target {
     Some(target) => {
-      let result = verify_answer(prefix, target, nonce);
+      let result = verify_answer(prefix, &target, nonce);
 
       if result {
-        cache.remove(&format!("challenge:{}", prefix));
+        challenge_cache.remove(&format!("challenge:{}", prefix)).await;
         true
       } else {
         false

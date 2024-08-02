@@ -1,6 +1,6 @@
 use axum::{extract::{Query, State}, Json};
 use serde::{Deserialize,Serialize};
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{collections::VecDeque, sync::Arc};
 use crate::{entities::{missing_track::MissingTrack, track::SimpleTrack}, errors::ApiError, repositories::track_repository::get_track_by_metadata, AppState};
 use axum_macros::debug_handler;
 use validator::Validate;
@@ -59,12 +59,11 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
       };
 
       {
-        let mut cache_lock = state.cache.lock().await;
         let mut queue_lock = state.queue.lock().await;
-        let is_queued_recently = cache_lock.contains_key(&format!("missing_track:{}", missing_track));
+        let is_queued_recently = state.get_cache.contains_key(&format!("missing_track:{}", missing_track));
 
         if !is_queued_recently {
-          cache_lock.insert(format!("missing_track:{}", missing_track), "1".to_owned(), Duration::from_secs(60 * 60 * 24));
+          state.get_cache.insert(format!("missing_track:{}", missing_track), "1".to_owned()).await;
           send_to_queue(missing_track, &mut *queue_lock).await;
         }
       }

@@ -25,7 +25,7 @@ indoc = "2"
 secular = { version="1.0.1", features=["bmp", "normalization"] }
 regex = "1.10.4"
 rand = "0.8.5"
-ttl_cache = "0.5.1"
+moka = { version = "0.12.8", features = ["future"] }
 sha2 = "0.10.8"
 hex = "0.4.3"
 collapse = "0.1.2"
