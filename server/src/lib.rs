@@ -1,6 +1,6 @@
 use axum::{
   http::{
-    header::CONTENT_TYPE,
+    header,
     Request,
   },
   body::Body,
@@ -79,7 +79,7 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
         .make_span_with(|request: &Request<Body>| {
           let headers = request.headers();
           let user_agent = headers
-            .get(axum::http::header::USER_AGENT)
+            .get(header::USER_AGENT)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
           let method = request.method().to_string();
@@ -103,7 +103,11 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
       CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers([CONTENT_TYPE])
+        .allow_headers([
+          header::CONTENT_TYPE,
+          "X-User-Agent".parse().unwrap(),
+          "Lrclib-Client".parse().unwrap()
+        ])
     );
 
   tokio::spawn(async move {
