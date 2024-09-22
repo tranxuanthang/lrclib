@@ -57,10 +57,10 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
   let tracks = {
     let mut conn = state.pool.get()?;
     get_tracks_by_keyword(
-      &q,
-      &track_name,
-      &artist_name,
-      &album_name,
+      q.as_deref(),
+      track_name.as_deref(),
+      artist_name.as_deref(),
+      album_name.as_deref(),
       &mut conn,
     )?
   };

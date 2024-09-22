@@ -11,8 +11,7 @@ pub struct QueryParams {
   track_name: String,
   #[validate(length(min = 1, message = "cannot be empty"))]
   artist_name: String,
-  #[validate(length(min = 1, message = "cannot be empty"))]
-  album_name: String,
+  album_name: Option<String>,
   #[validate(range(min = 1.0, max = 3600.0, message = "must be between 1 and 3600"))]
   duration: f64,
 }
@@ -40,7 +39,7 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
     get_track_by_metadata(
       &params.track_name,
       &params.artist_name,
-      &params.album_name,
+      params.album_name.as_deref(),
       params.duration,
       &mut conn,
     )?
@@ -51,20 +50,22 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
       Ok(Json(create_response(track)))
     }
     None => {
-      let missing_track = MissingTrack {
-        name: params.track_name.trim().to_owned(),
-        artist_name: params.artist_name.trim().to_owned(),
-        album_name: params.album_name.trim().to_owned(),
-        duration: params.duration,
-      };
+      if let Some(album_name) = params.album_name.as_deref() {
+        let missing_track = MissingTrack {
+          name: params.track_name.trim().to_owned(),
+          artist_name: params.artist_name.trim().to_owned(),
+          album_name: album_name.trim().to_owned(),
+          duration: params.duration,
+        };
 
-      {
-        let mut queue_lock = state.queue.lock().await;
-        let is_queued_recently = state.get_cache.contains_key(&format!("missing_track:{}", missing_track));
+        {
+          let mut queue_lock = state.queue.lock().await;
+          let is_queued_recently = state.get_cache.contains_key(&format!("missing_track:{}", missing_track));
 
-        if !is_queued_recently {
-          state.get_cache.insert(format!("missing_track:{}", missing_track), "1".to_owned()).await;
-          send_to_queue(missing_track, &mut *queue_lock).await;
+          if !is_queued_recently {
+            state.get_cache.insert(format!("missing_track:{}", missing_track), "1".to_owned()).await;
+            send_to_queue(missing_track, &mut *queue_lock).await;
+          }
         }
       }
 

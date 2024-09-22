@@ -30,6 +30,7 @@ use moka::future::Cache;
 use tokio::sync::Mutex;
 use tokio::signal;
 use queue::start_queue;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub mod errors;
 pub mod routes;
@@ -46,6 +47,7 @@ pub struct AppState {
   get_cache: Cache<String, String>,
   search_cache: Cache<String, String>,
   queue: Mutex<VecDeque<MissingTrack>>,
+  request_counter: Arc<AtomicUsize>,
 }
 
 pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
@@ -61,21 +63,24 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
       pool,
       challenge_cache: Cache::<String, String>::builder()
         .time_to_live(Duration::from_secs(60 * 5))
-        .max_capacity(500000)
+        .max_capacity(100000)
         .build(),
       get_cache: Cache::<String, String>::builder()
         .time_to_live(Duration::from_secs(60 * 60 * 72))
-        .max_capacity(500000)
+        .max_capacity(100000)
         .build(),
       search_cache: Cache::<String, String>::builder()
         .time_to_live(Duration::from_secs(60 * 60 * 24))
-        .max_capacity(2000000)
+        .time_to_idle(Duration::from_secs(60 * 60 * 4))
+        .max_capacity(500000)
         .build(),
       queue: VecDeque::new().into(),
+      request_counter: Arc::new(AtomicUsize::new(0)),
     }
   );
 
   let state_clone = state.clone();
+  let state_clone2 = state.clone();
 
   let api_routes = Router::new()
     .route("/get", get(get_lyrics_by_metadata::route))
@@ -83,6 +88,17 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
     .route("/search", get(search_lyrics::route))
     .route("/request-challenge", post(request_challenge::route))
     .route("/publish", post(publish_lyrics::route));
+
+  let counter = state.request_counter.clone();
+  tokio::spawn(async move {
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    loop {
+      interval.tick().await;
+      let count = counter.swap(0, Ordering::Relaxed);
+      tracing::info!(message = "requests in the last minute", requests_count = count);
+    }
+  });
 
   let app = Router::new()
     .nest("/api", api_routes)
@@ -113,6 +129,9 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
           )
         })
         .on_failure(trace::DefaultOnFailure::new().level(tracing::Level::ERROR))
+        .on_request(move |_request: &Request<Body>, _span: &Span| {
+          state_clone2.request_counter.fetch_add(1, Ordering::Relaxed);
+        })
     )
     .layer(
       CorsLayer::new()

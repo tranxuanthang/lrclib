@@ -111,67 +111,121 @@ pub fn get_track_id_by_metadata_tx(track_name: &str, artist_name: &str, album_na
   Ok(row)
 }
 
-pub fn get_track_by_metadata(track_name: &str, artist_name: &str, album_name: &str, duration: f64, conn: &mut Connection) -> Result<Option<SimpleTrack>> {
+pub fn get_track_by_metadata(track_name: &str, artist_name: &str, album_name: Option<&str>, duration: f64, conn: &mut Connection) -> Result<Option<SimpleTrack>> {
   let track_name_lower = prepare_input(track_name);
   let artist_name_lower = prepare_input(artist_name);
-  let album_name_lower = prepare_input(album_name);
+  let album_name_lower = album_name.map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
 
-  let query = indoc! {"
-    SELECT
-      tracks.id,
-      tracks.name,
-      tracks.artist_name,
-      tracks.album_name,
-      tracks.duration,
-      tracks.last_lyrics_id,
-      lyrics.instrumental,
-      lyrics.plain_lyrics,
-      lyrics.synced_lyrics
-    FROM
-      tracks
-      LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
-    WHERE
-      tracks.name_lower = ?
-      AND tracks.artist_name_lower = ?
-      AND tracks.album_name_lower = ?
-      AND duration >= ?
-      AND duration <= ?
-    ORDER BY
-      tracks.id
-  "};
-  let mut statement = conn.prepare(query)?;
-  let row = statement.query_row(
-    (track_name_lower, artist_name_lower, album_name_lower, duration - 2.0, duration + 2.0),
-    |row| {
-      let instrumental = match row.get("instrumental")? {
-        Some(value) => value,
-        None => false
-      };
+  match album_name_lower {
+    Some(album_name_lower) => {
+      let query = indoc! {"
+        SELECT
+          tracks.id,
+          tracks.name,
+          tracks.artist_name,
+          tracks.album_name,
+          tracks.duration,
+          tracks.last_lyrics_id,
+          lyrics.instrumental,
+          lyrics.plain_lyrics,
+          lyrics.synced_lyrics
+        FROM
+          tracks
+          LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
+        WHERE
+          tracks.name_lower = ?
+          AND tracks.artist_name_lower = ?
+          AND tracks.album_name_lower = ?
+          AND duration >= ?
+          AND duration <= ?
+        ORDER BY
+          tracks.id
+      "};
+      let mut statement = conn.prepare(query)?;
+      let row = statement.query_row(
+        (track_name_lower, artist_name_lower, album_name_lower, duration - 2.0, duration + 2.0),
+        |row| {
+          let instrumental = match row.get("instrumental")? {
+            Some(value) => value,
+            None => false
+          };
 
-      let last_lyrics = SimpleLyrics {
-        plain_lyrics: row.get("plain_lyrics")?,
-        synced_lyrics: row.get("synced_lyrics")?,
-        instrumental,
-      };
+          let last_lyrics = SimpleLyrics {
+            plain_lyrics: row.get("plain_lyrics")?,
+            synced_lyrics: row.get("synced_lyrics")?,
+            instrumental,
+          };
 
-      Ok(SimpleTrack {
-        id: row.get("id")?,
-        name: row.get("name")?,
-        artist_name: row.get("artist_name")?,
-        album_name: row.get("album_name")?,
-        duration: row.get("duration")?,
-        last_lyrics: Some(last_lyrics),
-      })
+          Ok(SimpleTrack {
+            id: row.get("id")?,
+            name: row.get("name")?,
+            artist_name: row.get("artist_name")?,
+            album_name: row.get("album_name")?,
+            duration: row.get("duration")?,
+            last_lyrics: Some(last_lyrics),
+          })
+        }
+      ).optional()?;
+      Ok(row)
     }
-  ).optional()?;
-  Ok(row)
+    None => {
+      let query = indoc! {"
+        SELECT
+          tracks.id,
+          tracks.name,
+          tracks.artist_name,
+          tracks.album_name,
+          tracks.duration,
+          tracks.last_lyrics_id,
+          lyrics.instrumental,
+          lyrics.plain_lyrics,
+          lyrics.synced_lyrics
+        FROM
+          tracks
+          LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
+        WHERE
+          tracks.name_lower = ?
+          AND tracks.artist_name_lower = ?
+          AND duration >= ?
+          AND duration <= ?
+        ORDER BY
+          tracks.id
+      "};
+      let mut statement = conn.prepare(query)?;
+      let row = statement.query_row(
+        (track_name_lower, artist_name_lower, duration - 2.0, duration + 2.0),
+        |row| {
+          let instrumental = match row.get("instrumental")? {
+            Some(value) => value,
+            None => false
+          };
+
+          let last_lyrics = SimpleLyrics {
+            plain_lyrics: row.get("plain_lyrics")?,
+            synced_lyrics: row.get("synced_lyrics")?,
+            instrumental,
+          };
+
+          Ok(SimpleTrack {
+            id: row.get("id")?,
+            name: row.get("name")?,
+            artist_name: row.get("artist_name")?,
+            album_name: row.get("album_name")?,
+            duration: row.get("duration")?,
+            last_lyrics: Some(last_lyrics),
+          })
+        }
+      ).optional()?;
+      Ok(row)
+    }
+  }
 }
 
 pub fn get_tracks_by_keyword(
-  q: &Option<String>,
-  track_name: &Option<String>,
-  artist_name: &Option<String>,
-  album_name: &Option<String>,
+  q: Option<&str>,
+  track_name: Option<&str>,
+  artist_name: Option<&str>,
+  album_name: Option<&str>,
   conn: &mut Connection,
 ) -> Result<Vec<SimpleTrack>> {
   // To search track by keyword, at least q or track_name must be present
@@ -213,12 +267,12 @@ pub fn get_tracks_by_keyword(
     None => {
       match track_name {
         Some(track_name) => {
-          let mut result = format!("(name_lower : {})", track_name).to_owned();
+          let mut result = format!("(name_lower : \"{}\")", track_name).to_owned();
           if let Some(artist_name) = artist_name {
-            result.push_str(format!("AND (artist_name_lower : {})", artist_name).as_ref());
+            result.push_str(format!("AND (artist_name_lower : \"{}\")", artist_name).as_ref());
           }
           if let Some(album_name) = album_name {
-            result.push_str(format!("AND (album_name_lower : {})", album_name).as_ref());
+            result.push_str(format!("AND (album_name_lower : \"{}\")", album_name).as_ref());
           }
           result
         }
