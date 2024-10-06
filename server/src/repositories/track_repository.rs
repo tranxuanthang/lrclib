@@ -382,15 +382,13 @@ pub fn add_one_tx(
 }
 
 pub fn flag_track_last_lyrics(track_id: i64, conn: &mut Connection) -> Result<()> {
+  let now = Utc::now();
+
   let query = indoc! {"
-    UPDATE
-      lyrics
-    SET
-      flags_count = flags_count + 1
-    WHERE
-      id = (SELECT last_lyrics_id FROM tracks WHERE id = ?)
+    INSERT INTO flags (lyrics_id, created_at)
+    SELECT last_lyrics_id, ? FROM tracks WHERE id = ?
   "};
   let mut statement = conn.prepare(query)?;
-  statement.execute([track_id])?;
+  statement.execute((now, track_id))?;
   Ok(())
 }

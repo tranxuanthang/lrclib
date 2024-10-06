@@ -87,7 +87,7 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<()>
   let re = Regex::new(r"\[au:\s*instrumental\]").expect("Invalid regex");
   let is_instrumental = synced_lyrics.as_ref().map_or(false, |lyrics| re.is_match(lyrics));
 
-  if is_instrumental || plain_lyrics.is_none() {
+  if is_instrumental {
     // Mark the track as instrumental
     lyrics_repository::add_one_tx(
       &None,
