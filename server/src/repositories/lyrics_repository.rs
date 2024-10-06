@@ -88,3 +88,14 @@ pub fn add_one_tx(
   )?;
   Ok(row_id)
 }
+
+pub fn get_last_10_mins_lyrics_count(conn: &mut Connection) -> Result<i64> {
+  let query = indoc! {"
+    SELECT COUNT(*) FROM lyrics
+    WHERE created_at > DATETIME('now', '-1 minute')
+    AND source = 'lrclib'
+  "};
+  let mut statement = conn.prepare(query)?;
+  let count = statement.query_row([], |row| row.get(0))?;
+  Ok(count)
+}

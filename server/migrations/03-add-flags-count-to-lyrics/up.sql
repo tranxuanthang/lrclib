@@ -1,0 +1,1 @@
+ALTER TABLE lyrics ADD COLUMN flags_count INTEGER DEFAULT 0;
