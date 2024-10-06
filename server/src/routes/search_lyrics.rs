@@ -35,12 +35,11 @@ pub struct CachedResult {
   created_at: DateTime<Utc>,
 }
 
-
 pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<AppState>>) -> Result<Json<Vec<TrackResponse>>, ApiError> {
-  let q = params.q.as_ref().map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
-  let track_name = params.track_name.as_ref().map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
-  let artist_name = params.artist_name.as_ref().map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
-  let album_name = params.album_name.as_ref().map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
+  let q = process_param(&params.q);
+  let track_name = process_param(&params.track_name);
+  let artist_name = process_param(&params.artist_name);
+  let album_name = process_param(&params.album_name);
 
   // Generate a cache key based on query parameters
   let cache_key = format!(
@@ -161,4 +160,12 @@ async fn fetch_and_cache_tracks(
   state.search_cache.insert(cache_key, serde_json::to_string(&cached_result)?).await;
 
   Ok(response)
+}
+
+fn process_param(param: &Option<String>) -> Option<String> {
+  param
+    .as_ref()
+    .map(|s| prepare_input(s))
+    .filter(|s| !s.is_empty())
+    .map(|s| s.to_owned())
 }
