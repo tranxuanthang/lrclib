@@ -56,30 +56,39 @@ async fn process_track(state: &Arc<AppState>, provider: &mut NoopProvider, missi
 
   match maybe_data {
     Ok(data) => {
-      let mut conn = state.pool.get().unwrap();
-      process_lyrics_result(&missing_track, data, &mut conn).await;
+      process_lyrics_result(&missing_track, data, state).await;
     },
-    Err(err) => tracing::error!(
-      message = format!("error while finding lyrics"),
-      track_name = missing_track.name,
-      artist_name = missing_track.artist_name,
-      album_name = missing_track.album_name,
-      duration = missing_track.duration,
-      error = err.to_string(),
-      queue = true,
-    ),
+    Err(err) => {
+      tracing::error!(
+        message = format!("error while finding lyrics"),
+        track_name = missing_track.name,
+        artist_name = missing_track.artist_name,
+        album_name = missing_track.album_name,
+        duration = missing_track.duration,
+        error = err.to_string(),
+        queue = true,
+      );
+
+      // Push the track back to the queue
+      let mut queue_lock = state.queue.lock().await;
+      queue_lock.push_back(missing_track);
+    },
   }
 }
 
-async fn process_lyrics_result(missing_track: &MissingTrack, data: Option<ScrapedData>, conn: &mut Connection) {
+async fn process_lyrics_result(missing_track: &MissingTrack, data: Option<ScrapedData>, state: &Arc<AppState>) {
+  let mut conn = state.pool.get().unwrap();
+  let remaining_jobs = get_remaining_jobs(&state).await;
+
   if let Some(data) = data {
-    match add_found(missing_track, &data, conn).await {
+    match add_found(missing_track, &data, &mut conn).await {
       Ok(_) => tracing::info!(
         message = format!("added new lyrics"),
         track_name = missing_track.name,
         artist_name = missing_track.artist_name,
         album_name = missing_track.album_name,
         duration = missing_track.duration,
+        remaining_jobs = remaining_jobs,
         queue = true,
       ),
       Err(err) => tracing::error!(
@@ -88,6 +97,7 @@ async fn process_lyrics_result(missing_track: &MissingTrack, data: Option<Scrape
         artist_name = missing_track.artist_name,
         album_name = missing_track.album_name,
         duration = missing_track.duration,
+        remaining_jobs = remaining_jobs,
         error = err.to_string(),
         queue = true,
       ),
@@ -99,6 +109,7 @@ async fn process_lyrics_result(missing_track: &MissingTrack, data: Option<Scrape
       artist_name = missing_track.artist_name,
       album_name = missing_track.album_name,
       duration = missing_track.duration,
+      remaining_jobs = remaining_jobs,
       queue = true,
     );
   }
@@ -127,4 +138,9 @@ async fn add_found(missing_track: &MissingTrack, data: &ScrapedData, conn: &mut 
   tx.commit()?;
 
   Ok(())
+}
+
+async fn get_remaining_jobs(state: &Arc<AppState>) -> usize {
+  let queue_lock = state.queue.lock().await;
+  queue_lock.len()
 }
