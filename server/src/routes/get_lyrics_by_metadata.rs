@@ -4,6 +4,7 @@ use std::{collections::VecDeque, sync::Arc};
 use crate::{entities::{missing_track::MissingTrack, track::SimpleTrack}, errors::ApiError, repositories::track_repository::get_track_by_metadata, AppState};
 use axum_macros::debug_handler;
 use validator::Validate;
+use anyhow::Result;
 
 #[derive(Validate, Deserialize)]
 pub struct QueryParams {
@@ -34,66 +35,61 @@ pub struct TrackResponse {
 pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<AppState>>) -> Result<Json<TrackResponse>, ApiError> {
   params.validate().map_err(|e| ApiError::ValidationError(e.to_string()))?;
 
-  let maybe_track = {
-    let mut conn = state.pool.get()?;
-    get_track_by_metadata(
-      &params.track_name,
-      &params.artist_name,
-      params.album_name.as_deref(),
-      params.duration,
-      &mut conn,
-    )?
-  };
+  // Attempt to fetch the track with all provided metadata
+  if let Some(track) = fetch_track(&params, &state).await? {
+    return Ok(Json(create_response(track)));
+  }
 
-  match maybe_track {
-    Some(track) => {
-      Ok(Json(create_response(track)))
-    }
-    None => {
-      if let (Some(album_name), Some(duration)) = (
-        params.album_name.filter(|name| !name.trim().is_empty()),
-        params.duration,
-      ) {
-        let missing_track = MissingTrack {
-          name: params.track_name.trim().to_owned(),
-          artist_name: params.artist_name.trim().to_owned(),
-          album_name: album_name.trim().to_owned(),
-          duration,
-        };
+  // If not found, handle missing track logic
+  handle_missing_track(&params, &state).await;
 
-        let mut queue_lock = state.queue.lock().await;
-        let cache_key = format!("missing_track:{}", missing_track);
-        let is_queued_recently = state.get_cache.contains_key(&cache_key);
+  // Retry fetching the track without the album name
+  if let Some(track) = fetch_track_without_album(&params, &state).await? {
+    return Ok(Json(create_response(track)));
+  }
 
-        if !is_queued_recently {
-          state
-            .get_cache
-            .insert(cache_key, "1".to_owned())
-            .await;
-          send_to_queue(missing_track, &mut *queue_lock).await;
-        }
-      }
+  Err(ApiError::TrackNotFoundError)
+}
 
-      // Try getting the track without the album name
-      let maybe_track = {
-        let mut conn = state.pool.get()?;
-        get_track_by_metadata(
-          &params.track_name,
-          &params.artist_name,
-          None,
-          params.duration,
-          &mut conn,
-        )?
-      };
+async fn fetch_track(params: &QueryParams, state: &Arc<AppState>) -> Result<Option<SimpleTrack>> {
+  let mut conn = state.pool.get()?;
+  get_track_by_metadata(
+    &params.track_name,
+    &params.artist_name,
+    params.album_name.as_deref(),
+    params.duration,
+    &mut conn,
+  )
+}
 
-      match maybe_track {
-        Some(track) => {
-          Ok(Json(create_response(track)))
-        }
-        None => {
-          Err(ApiError::TrackNotFoundError)
-        }
-      }
+async fn fetch_track_without_album(params: &QueryParams, state: &Arc<AppState>) -> Result<Option<SimpleTrack>> {
+  let mut conn = state.pool.get()?;
+  get_track_by_metadata(
+    &params.track_name,
+    &params.artist_name,
+    None,
+    params.duration,
+    &mut conn,
+  )
+}
+
+async fn handle_missing_track(params: &QueryParams, state: &Arc<AppState>) {
+  if let (Some(album_name), Some(duration)) = (
+    params.album_name.as_ref().filter(|name| !name.trim().is_empty()),
+    params.duration,
+  ) {
+    let missing_track = MissingTrack {
+      name: params.track_name.trim().to_owned(),
+      artist_name: params.artist_name.trim().to_owned(),
+      album_name: album_name.trim().to_owned(),
+      duration,
+    };
+
+    let cache_key = format!("missing_track:{}", missing_track);
+    if !state.get_cache.contains_key(&cache_key) {
+      state.get_cache.insert(cache_key, "1".to_owned()).await;
+      let mut queue_lock = state.queue.lock().await;
+      send_to_queue(missing_track, &mut *queue_lock).await;
     }
   }
 }
