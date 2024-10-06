@@ -20,7 +20,7 @@ anyhow = "1.0.82"
 thiserror = "1.0.58"
 include_dir = "0.7.3"
 lazy_static = "1.4.0"
-chrono = "0.4.38"
+chrono = { version = "0.4.38", features = ["serde"] }
 indoc = "2"
 secular = { version="1.0.1", features=["bmp", "normalization"] }
 regex = "1.10.4"
