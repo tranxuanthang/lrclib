@@ -67,12 +67,12 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
         .build(),
       get_cache: Cache::<String, String>::builder()
         .time_to_live(Duration::from_secs(60 * 60 * 72))
-        .max_capacity(100000)
+        .max_capacity(400000)
         .build(),
       search_cache: Cache::<String, String>::builder()
         .time_to_live(Duration::from_secs(60 * 60 * 24))
         .time_to_idle(Duration::from_secs(60 * 60 * 4))
-        .max_capacity(500000)
+        .max_capacity(400000)
         .build(),
       queue: VecDeque::new().into(),
       request_counter: AtomicUsize::new(0),
