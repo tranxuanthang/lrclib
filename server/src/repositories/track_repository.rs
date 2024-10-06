@@ -381,14 +381,14 @@ pub fn add_one_tx(
   Ok(row_id)
 }
 
-pub fn flag_track_last_lyrics(track_id: i64, conn: &mut Connection) -> Result<()> {
+pub fn flag_track_last_lyrics(track_id: i64, content: &str, conn: &mut Connection) -> Result<()> {
   let now = Utc::now();
 
   let query = indoc! {"
-    INSERT INTO flags (lyrics_id, created_at)
-    SELECT last_lyrics_id, ? FROM tracks WHERE id = ?
+    INSERT INTO flags (lyrics_id, content, created_at)
+    SELECT last_lyrics_id, ?, ? FROM tracks WHERE id = ?
   "};
   let mut statement = conn.prepare(query)?;
-  statement.execute((now, track_id))?;
+  statement.execute((content, now, track_id))?;
   Ok(())
 }

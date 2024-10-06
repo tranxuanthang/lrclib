@@ -18,7 +18,8 @@ use axum_macros::debug_handler;
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FlagLyricsRequest {
-    track_id: i64
+    track_id: i64,
+    content: Option<String>,
 }
 
 #[debug_handler]
@@ -32,11 +33,10 @@ pub async fn route(
       let is_valid = is_valid_publish_token(publish_token.to_str()?, &state.challenge_cache).await;
 
       if is_valid {
-        {
-          let track_id = payload.track_id;
-          let mut conn = state.pool.get()?;
-          track_repository::flag_track_last_lyrics(track_id, &mut conn)?;
-        }
+        let content = payload.content.unwrap_or("".to_string());
+        let track_id = payload.track_id;
+        let mut conn = state.pool.get()?;
+        track_repository::flag_track_last_lyrics(track_id, &content, &mut conn)?;
 
         Ok(StatusCode::CREATED)
       } else {
