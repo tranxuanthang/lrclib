@@ -51,20 +51,22 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
     }
     None => {
       if let Some(album_name) = params.album_name.as_deref() {
-        let missing_track = MissingTrack {
-          name: params.track_name.trim().to_owned(),
-          artist_name: params.artist_name.trim().to_owned(),
-          album_name: album_name.trim().to_owned(),
-          duration: params.duration,
-        };
+        if !album_name.trim().is_empty() {
+          let missing_track = MissingTrack {
+            name: params.track_name.trim().to_owned(),
+            artist_name: params.artist_name.trim().to_owned(),
+            album_name: album_name.trim().to_owned(),
+            duration: params.duration,
+          };
 
-        {
-          let mut queue_lock = state.queue.lock().await;
-          let is_queued_recently = state.get_cache.contains_key(&format!("missing_track:{}", missing_track));
+          {
+            let mut queue_lock = state.queue.lock().await;
+            let is_queued_recently = state.get_cache.contains_key(&format!("missing_track:{}", missing_track));
 
-          if !is_queued_recently {
-            state.get_cache.insert(format!("missing_track:{}", missing_track), "1".to_owned()).await;
-            send_to_queue(missing_track, &mut *queue_lock).await;
+            if !is_queued_recently {
+              state.get_cache.insert(format!("missing_track:{}", missing_track), "1".to_owned()).await;
+              send_to_queue(missing_track, &mut *queue_lock).await;
+            }
           }
         }
       }
