@@ -6,6 +6,7 @@ use crate::{
   utils::prepare_input,
 };
 use chrono::prelude::*;
+use rusqlite::params_from_iter;
 
 pub fn get_track_by_id(track_id: i64, conn: &mut Connection) -> Result<Option<SimpleTrack>> {
   let query = indoc! {"
@@ -111,114 +112,94 @@ pub fn get_track_id_by_metadata_tx(track_name: &str, artist_name: &str, album_na
   Ok(row)
 }
 
-pub fn get_track_by_metadata(track_name: &str, artist_name: &str, album_name: Option<&str>, duration: f64, conn: &mut Connection) -> Result<Option<SimpleTrack>> {
+pub fn get_track_by_metadata(
+  track_name: &str,
+  artist_name: &str,
+  album_name: Option<&str>,
+  duration: Option<f64>,
+  conn: &mut Connection,
+) -> Result<Option<SimpleTrack>> {
   let track_name_lower = prepare_input(track_name);
   let artist_name_lower = prepare_input(artist_name);
-  let album_name_lower = album_name.map(|s| prepare_input(s)).filter(|s| !s.is_empty()).map(|s| s.to_owned());
 
-  match album_name_lower {
-    Some(album_name_lower) => {
-      let query = indoc! {"
-        SELECT
-          tracks.id,
-          tracks.name,
-          tracks.artist_name,
-          tracks.album_name,
-          tracks.duration,
-          tracks.last_lyrics_id,
-          lyrics.instrumental,
-          lyrics.plain_lyrics,
-          lyrics.synced_lyrics
-        FROM
-          tracks
-          LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
-        WHERE
-          tracks.name_lower = ?
-          AND tracks.artist_name_lower = ?
-          AND tracks.album_name_lower = ?
-          AND duration >= ?
-          AND duration <= ?
-        ORDER BY
-          tracks.id
-      "};
-      let mut statement = conn.prepare(query)?;
-      let row = statement.query_row(
-        (track_name_lower, artist_name_lower, album_name_lower, duration - 2.0, duration + 2.0),
-        |row| {
-          let instrumental = match row.get("instrumental")? {
-            Some(value) => value,
-            None => false
-          };
+  // Start building the SQL query
+  let select_query = indoc! {"
+    SELECT
+      tracks.id,
+      tracks.name,
+      tracks.artist_name,
+      tracks.album_name,
+      tracks.duration,
+      tracks.last_lyrics_id,
+      lyrics.instrumental,
+      lyrics.plain_lyrics,
+      lyrics.synced_lyrics
+    FROM
+      tracks
+      LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
+  "};
 
-          let last_lyrics = SimpleLyrics {
-            plain_lyrics: row.get("plain_lyrics")?,
-            synced_lyrics: row.get("synced_lyrics")?,
-            instrumental,
-          };
+  // Initialize where clauses and parameters
+  let mut where_clauses = vec![
+    "tracks.name_lower = ?".to_string(),
+    "tracks.artist_name_lower = ?".to_string(),
+  ];
+  let mut params: Vec<rusqlite::types::Value> = vec![
+    track_name_lower.into(),
+    artist_name_lower.into(),
+  ];
 
-          Ok(SimpleTrack {
-            id: row.get("id")?,
-            name: row.get("name")?,
-            artist_name: row.get("artist_name")?,
-            album_name: row.get("album_name")?,
-            duration: row.get("duration")?,
-            last_lyrics: Some(last_lyrics),
-          })
-        }
-      ).optional()?;
-      Ok(row)
-    }
-    None => {
-      let query = indoc! {"
-        SELECT
-          tracks.id,
-          tracks.name,
-          tracks.artist_name,
-          tracks.album_name,
-          tracks.duration,
-          tracks.last_lyrics_id,
-          lyrics.instrumental,
-          lyrics.plain_lyrics,
-          lyrics.synced_lyrics
-        FROM
-          tracks
-          LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
-        WHERE
-          tracks.name_lower = ?
-          AND tracks.artist_name_lower = ?
-          AND duration >= ?
-          AND duration <= ?
-        ORDER BY
-          tracks.id
-      "};
-      let mut statement = conn.prepare(query)?;
-      let row = statement.query_row(
-        (track_name_lower, artist_name_lower, duration - 2.0, duration + 2.0),
-        |row| {
-          let instrumental = match row.get("instrumental")? {
-            Some(value) => value,
-            None => false
-          };
-
-          let last_lyrics = SimpleLyrics {
-            plain_lyrics: row.get("plain_lyrics")?,
-            synced_lyrics: row.get("synced_lyrics")?,
-            instrumental,
-          };
-
-          Ok(SimpleTrack {
-            id: row.get("id")?,
-            name: row.get("name")?,
-            artist_name: row.get("artist_name")?,
-            album_name: row.get("album_name")?,
-            duration: row.get("duration")?,
-            last_lyrics: Some(last_lyrics),
-          })
-        }
-      ).optional()?;
-      Ok(row)
-    }
+  // Conditionally add duration constraints
+  if let Some(dur) = duration {
+    let duration_min = dur - 2.0;
+    let duration_max = dur + 2.0;
+    where_clauses.push("tracks.duration >= ?".to_string());
+    where_clauses.push("tracks.duration <= ?".to_string());
+    params.push(duration_min.into());
+    params.push(duration_max.into());
   }
+
+  // Conditionally add album_name to the query
+  if let Some(album_name_lower) = album_name
+    .map(|s| prepare_input(s))
+    .filter(|s| !s.is_empty())
+  {
+    where_clauses.push("tracks.album_name_lower = ?".to_string());
+    params.push(album_name_lower.into());
+  }
+
+  // Combine all parts of the query
+  let query = format!(
+    "{select} WHERE {where_clause} ORDER BY tracks.id",
+    select = select_query,
+    where_clause = where_clauses.join(" AND ")
+  );
+
+  // Prepare and execute the statement
+  let mut statement = conn.prepare(&query)?;
+  let row = statement.query_row(
+    params_from_iter(params.iter().map(|v| v as &dyn rusqlite::ToSql)),
+    |row| {
+      let instrumental = row.get::<_, Option<bool>>("instrumental")?.unwrap_or(false);
+
+      let last_lyrics = SimpleLyrics {
+        plain_lyrics: row.get("plain_lyrics")?,
+        synced_lyrics: row.get("synced_lyrics")?,
+        instrumental,
+      };
+
+      Ok(SimpleTrack {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        artist_name: row.get("artist_name")?,
+        album_name: row.get("album_name")?,
+        duration: row.get("duration")?,
+        last_lyrics: Some(last_lyrics),
+      })
+    }
+  ).optional()?;
+
+  Ok(row)
 }
 
 pub fn get_tracks_by_keyword(
