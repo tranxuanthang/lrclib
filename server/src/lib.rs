@@ -47,7 +47,7 @@ pub struct AppState {
   get_cache: Cache<String, String>,
   search_cache: Cache<String, String>,
   queue: Mutex<VecDeque<MissingTrack>>,
-  request_counter: Arc<AtomicUsize>,
+  request_counter: AtomicUsize,
 }
 
 pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
@@ -75,12 +75,13 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
         .max_capacity(500000)
         .build(),
       queue: VecDeque::new().into(),
-      request_counter: Arc::new(AtomicUsize::new(0)),
+      request_counter: AtomicUsize::new(0),
     }
   );
 
-  let state_clone = state.clone();
-  let state_clone2 = state.clone();
+  let state_for_logging = state.clone();
+  let state_for_metrics = state.clone();
+  let state_for_queue = state.clone();
 
   let api_routes = Router::new()
     .route("/get", get(get_lyrics_by_metadata::route))
@@ -89,13 +90,12 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
     .route("/request-challenge", post(request_challenge::route))
     .route("/publish", post(publish_lyrics::route));
 
-  let counter = state.request_counter.clone();
   tokio::spawn(async move {
     tokio::time::sleep(Duration::from_secs(60)).await;
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     loop {
       interval.tick().await;
-      let count = counter.swap(0, Ordering::Relaxed);
+      let count = state_for_metrics.request_counter.swap(0, Ordering::Relaxed);
       tracing::info!(message = "requests in the last minute", requests_count = count);
     }
   });
@@ -130,7 +130,7 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
         })
         .on_failure(trace::DefaultOnFailure::new().level(tracing::Level::ERROR))
         .on_request(move |_request: &Request<Body>, _span: &Span| {
-          state_clone2.request_counter.fetch_add(1, Ordering::Relaxed);
+          state_for_logging.request_counter.fetch_add(1, Ordering::Relaxed);
         })
     )
     .layer(
@@ -145,7 +145,7 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
     );
 
   tokio::spawn(async move {
-    start_queue(workers_count, state_clone).await;
+    start_queue(workers_count, state_for_queue).await;
   });
 
   let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();

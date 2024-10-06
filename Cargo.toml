@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 server = { path = "./server" }
-clap = { version = "4.5.4", features = ["derive"] }
+clap = { version = "4.5.4", features = ["derive", "env"] }
 tokio = { version = "1.37.0", features = ["full"] }
 
 [workspace]

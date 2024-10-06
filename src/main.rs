@@ -18,11 +18,22 @@ enum Commands {
     port: u16,
 
     /// Path to the database file
-    #[arg(short, long, value_name = "FILE")]
+    #[arg(
+      short,
+      long,
+      value_name = "FILE",
+      env = "LRCLIB_DATABASE_FILE"
+    )]
     database: PathBuf,
 
     /// The number of queue processing workers
-    #[arg(short, long, value_name = "WORKERS_COUNT", default_value_t = 0)]
+    #[arg(
+      short,
+      long,
+      value_name = "WORKERS_COUNT",
+      env = "LRCLIB_WORKERS_COUNT",
+      default_value_t = 0
+    )]
     workers_count: u8,
   },
 }
