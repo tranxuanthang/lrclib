@@ -42,8 +42,7 @@ async fn worker(state: Arc<AppState>) {
 }
 
 async fn get_next_track(state: &Arc<AppState>) -> Option<MissingTrack> {
-  let mut queue_lock = state.queue.lock().await;
-  queue_lock.pop_front()
+  state.queue.pop()
 }
 
 async fn process_track(state: &Arc<AppState>, provider: &mut NoopProvider, missing_track: MissingTrack) {
@@ -70,8 +69,7 @@ async fn process_track(state: &Arc<AppState>, provider: &mut NoopProvider, missi
       );
 
       // Push the track back to the queue
-      let mut queue_lock = state.queue.lock().await;
-      queue_lock.push_back(missing_track);
+      let _ = state.queue.push(missing_track);
     },
   }
 }
@@ -141,6 +139,5 @@ async fn add_found(missing_track: &MissingTrack, data: &ScrapedData, conn: &mut 
 }
 
 async fn get_remaining_jobs(state: &Arc<AppState>) -> usize {
-  let queue_lock = state.queue.lock().await;
-  queue_lock.len()
+  state.queue.len()
 }

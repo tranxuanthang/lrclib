@@ -2,7 +2,7 @@ use serde::{Deserialize,Serialize};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MissingTrack {
   pub name: String,
   pub artist_name: String,

@@ -10,7 +10,7 @@ use axum::{
 };
 use entities::missing_track::MissingTrack;
 use tracing_subscriber::EnvFilter;
-use std::{collections::VecDeque, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use routes::{
@@ -28,10 +28,10 @@ use tower_http::{
 };
 use tracing::Span;
 use moka::future::Cache;
-use tokio::sync::Mutex;
 use tokio::signal;
 use queue::start_queue;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use crossbeam_queue::ArrayQueue;
 
 pub mod errors;
 pub mod routes;
@@ -47,7 +47,7 @@ pub struct AppState {
   challenge_cache: Cache<String, String>,
   get_cache: Cache<String, String>,
   search_cache: Cache<String, String>,
-  queue: Mutex<VecDeque<MissingTrack>>,
+  queue: ArrayQueue<MissingTrack>,
   request_counter: AtomicUsize,
 }
 
@@ -75,7 +75,7 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
         .time_to_idle(Duration::from_secs(60 * 60 * 4))
         .max_capacity(400000)
         .build(),
-      queue: VecDeque::new().into(),
+      queue: ArrayQueue::new(600000),
       request_counter: AtomicUsize::new(0),
     }
   );

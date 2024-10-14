@@ -1,10 +1,11 @@
 use axum::{extract::{Query, State}, Json};
 use serde::{Deserialize,Serialize};
-use std::{collections::VecDeque, sync::Arc};
+use std::sync::Arc;
 use crate::{entities::{missing_track::MissingTrack, track::SimpleTrack}, errors::ApiError, repositories::track_repository::get_track_by_metadata, AppState};
 use axum_macros::debug_handler;
 use validator::Validate;
 use anyhow::Result;
+use crossbeam_queue::ArrayQueue;
 
 #[derive(Validate, Deserialize)]
 pub struct QueryParams {
@@ -88,8 +89,7 @@ async fn handle_missing_track(params: &QueryParams, state: &Arc<AppState>) {
     let cache_key = format!("missing_track:{}", missing_track);
     if !state.get_cache.contains_key(&cache_key) {
       state.get_cache.insert(cache_key, "1".to_owned()).await;
-      let mut queue_lock = state.queue.lock().await;
-      send_to_queue(missing_track, &mut *queue_lock).await;
+      send_to_queue(missing_track, &state.queue);
     }
   }
 }
@@ -123,13 +123,21 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
   }
 }
 
-async fn send_to_queue(missing_track: MissingTrack, queue: &mut VecDeque<MissingTrack>) {
-  tracing::info!(
-    message = format!("sending missing track to queue"),
-    track_name = missing_track.name,
-    artist_name = missing_track.artist_name,
-    album_name = missing_track.album_name,
-    duration = missing_track.duration,
-  );
-  queue.push_back(missing_track);
+fn send_to_queue(missing_track: MissingTrack, queue: &ArrayQueue<MissingTrack>) {
+  match queue.push(missing_track.clone()) {
+    Ok(_) => tracing::info!(
+      message = "sent missing track to queue",
+      track_name = missing_track.name,
+      artist_name = missing_track.artist_name,
+      album_name = missing_track.album_name,
+      duration = missing_track.duration,
+    ),
+    Err(missing_track) => tracing::error!(
+      message = "failed to push to queue",
+      track_name = missing_track.name,
+      artist_name = missing_track.artist_name,
+      album_name = missing_track.album_name,
+      duration = missing_track.duration,
+    ),
+  }
 }
