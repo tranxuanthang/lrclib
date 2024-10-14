@@ -7,7 +7,7 @@ use validator::Validate;
 use anyhow::Result;
 use crossbeam_queue::ArrayQueue;
 
-#[derive(Validate, Deserialize)]
+#[derive(Clone, Validate, Deserialize)]
 pub struct QueryParams {
   #[validate(length(min = 1, message = "cannot be empty"))]
   track_name: String,
@@ -42,7 +42,11 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
   }
 
   // If not found, handle missing track logic
-  handle_missing_track(&params, &state).await;
+  let params_clone = params.clone();
+  let state_clone = state.clone();
+  tokio::spawn(async move {
+      handle_missing_track(&params_clone, &state_clone).await;
+  });
 
   // Retry fetching the track without the album name
   if let Some(track) = fetch_track_without_album(&params, &state).await? {

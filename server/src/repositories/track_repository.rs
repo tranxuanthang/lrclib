@@ -250,7 +250,7 @@ pub fn get_tracks_by_keyword(
         Some(track_name) => {
           let mut result = format!("(name_lower : \"{}\")", track_name).to_owned();
           if let Some(artist_name) = artist_name {
-            result.push_str(format!("AND (artist_name_lower : \"{}\")", artist_name).as_ref());
+            result.push_str(format!("AND (artist_name_lower : {})", artist_name).as_ref());
           }
           if let Some(album_name) = album_name {
             result.push_str(format!("AND (album_name_lower : \"{}\")", album_name).as_ref());

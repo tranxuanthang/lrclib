@@ -17,7 +17,7 @@ lazy_static! {
 pub fn init_db(path: &PathBuf) -> Result<Pool<SqliteConnectionManager>> {
   let manager = SqliteConnectionManager::file(path);
   let pool = r2d2::Pool::builder()
-    .max_size(15)
+    .max_size(30)
     .build(manager)?;
 
   let mut conn = pool.get()?;
