@@ -214,35 +214,40 @@ pub fn get_tracks_by_keyword(
     return Ok(vec![])
   }
 
-  let query = indoc! {"
-  SELECT
-    tracks.id,
-    tracks.name,
-    tracks.artist_name,
-    tracks.album_name,
-    tracks.duration,
-    lyrics.instrumental,
-    lyrics.plain_lyrics,
-    lyrics.synced_lyrics,
-    search_results.rank AS rank
-  FROM
-    (
-      SELECT
-        rank,
-        rowid
-      FROM
-        tracks_fts
-      WHERE
-        tracks_fts MATCH ?
-      ORDER BY
-        rank
-      LIMIT
-        20
-    ) AS search_results
-    LEFT JOIN tracks ON search_results.rowid = tracks.id
-    LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
-  "};
-  let mut statement = conn.prepare(query)?;
+  // Determine whether to include ORDER BY rank based on the number of words in q
+  let is_ordered = if let Some(query) = q {
+    query.split_whitespace().count() > 3
+  } else {
+    true
+  };
+
+  // Build the subquery with or without ORDER BY rank
+  let subquery = if is_ordered {
+    indoc! {"SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ? ORDER BY rank LIMIT 20"}.to_string()
+  } else {
+    indoc! {"SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ? LIMIT 20"}.to_string()
+  };
+
+  // Build the complete query using the subquery
+  let query = format!(
+    "SELECT
+      tracks.id,
+      tracks.name,
+      tracks.artist_name,
+      tracks.album_name,
+      tracks.duration,
+      lyrics.instrumental,
+      lyrics.plain_lyrics,
+      lyrics.synced_lyrics
+    FROM
+      ({subquery}) AS search_results
+      LEFT JOIN tracks ON search_results.rowid = tracks.id
+      LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
+    ",
+    subquery = subquery
+  );
+
+  let mut statement = conn.prepare(&query)?;
   let fts_query = match q {
     Some(q) => prepare_input(&q),
     None => {
@@ -281,12 +286,12 @@ pub fn get_tracks_by_keyword(
     };
 
     let track = SimpleTrack {
-        id: row.get("id")?,
-        name: row.get("name")?,
-        artist_name: row.get("artist_name")?,
-        album_name: row.get("album_name")?,
-        duration: row.get("duration")?,
-        last_lyrics: Some(last_lyrics),
+      id: row.get("id")?,
+      name: row.get("name")?,
+      artist_name: row.get("artist_name")?,
+      album_name: row.get("album_name")?,
+      duration: row.get("duration")?,
+      last_lyrics: Some(last_lyrics),
     };
 
     tracks.push(track);

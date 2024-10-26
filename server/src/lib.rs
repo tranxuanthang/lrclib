@@ -45,7 +45,6 @@ pub mod providers;
 pub struct AppState {
   pool: Pool<SqliteConnectionManager>,
   challenge_cache: Cache<String, String>,
-  get_cache: Cache<String, String>,
   search_cache: Cache<String, String>,
   queue: ArrayQueue<MissingTrack>,
   request_counter: AtomicUsize,
@@ -65,10 +64,6 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
       challenge_cache: Cache::<String, String>::builder()
         .time_to_live(Duration::from_secs(60 * 5))
         .max_capacity(100000)
-        .build(),
-      get_cache: Cache::<String, String>::builder()
-        .time_to_live(Duration::from_secs(60 * 60 * 72))
-        .max_capacity(400000)
         .build(),
       search_cache: Cache::<String, String>::builder()
         .time_to_live(Duration::from_secs(60 * 60 * 24))

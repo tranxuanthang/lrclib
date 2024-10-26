@@ -1,7 +1,12 @@
 use axum::{extract::{Query, State}, Json};
 use serde::{Deserialize,Serialize};
 use std::sync::Arc;
-use crate::{entities::{missing_track::MissingTrack, track::SimpleTrack}, errors::ApiError, repositories::track_repository::get_track_by_metadata, AppState};
+use crate::{
+    entities::{missing_track::MissingTrack, track::SimpleTrack},
+    errors::ApiError,
+    repositories::{track_repository::get_track_by_metadata, missing_track_repository},
+    AppState,
+};
 use axum_macros::debug_handler;
 use validator::Validate;
 use anyhow::Result;
@@ -41,17 +46,19 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
     return Ok(Json(create_response(track)));
   }
 
-  // If not found, handle missing track logic
-  let params_clone = params.clone();
-  let state_clone = state.clone();
-  tokio::spawn(async move {
-      handle_missing_track(&params_clone, &state_clone).await;
-  });
-
   // Retry fetching the track without the album name
   if let Some(track) = fetch_track_without_album(&params, &state).await? {
     return Ok(Json(create_response(track)));
   }
+
+  // If not found, handle missing track logic
+  let params_clone = params.clone();
+  let state_clone = state.clone();
+  tokio::spawn(async move {
+    if let Err(e) = handle_missing_track(&params_clone, &state_clone).await {
+      tracing::error!(message = "failed to handle missing track", error = e.to_string());
+    }
+  });
 
   Err(ApiError::TrackNotFoundError)
 }
@@ -78,7 +85,7 @@ async fn fetch_track_without_album(params: &QueryParams, state: &Arc<AppState>) 
   )
 }
 
-async fn handle_missing_track(params: &QueryParams, state: &Arc<AppState>) {
+async fn handle_missing_track(params: &QueryParams, state: &Arc<AppState>) -> Result<()> {
   if let (Some(album_name), Some(duration)) = (
     params.album_name.as_ref().filter(|name| !name.trim().is_empty()),
     params.duration,
@@ -90,12 +97,17 @@ async fn handle_missing_track(params: &QueryParams, state: &Arc<AppState>) {
       duration,
     };
 
-    let cache_key = format!("missing_track:{}", missing_track);
-    if !state.get_cache.contains_key(&cache_key) {
-      state.get_cache.insert(cache_key, "1".to_owned()).await;
+    let mut conn = state.pool.get()?;
+
+    let missing_track_id = missing_track_repository::get_track_id_by_metadata(&params.track_name, &params.artist_name, &album_name, duration, &mut conn)?;
+
+    if let None = missing_track_id {
+      missing_track_repository::add_one(&params.track_name, &params.artist_name, &album_name, duration, &mut conn)?;
       send_to_queue(missing_track, &state.queue);
     }
   }
+
+  Ok(())
 }
 
 fn create_response(track: SimpleTrack) -> TrackResponse {
