@@ -40,10 +40,10 @@ pub struct CachedResult {
 }
 
 pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<AppState>>) -> Result<Json<Vec<TrackResponse>>, ApiError> {
-  let q = process_param(&params.q);
-  let track_name = process_param(&params.track_name);
-  let artist_name = process_param(&params.artist_name);
-  let album_name = process_param(&params.album_name);
+  let q = process_param(params.q.as_deref());
+  let track_name = process_param(params.track_name.as_deref());
+  let artist_name = process_param(params.artist_name.as_deref());
+  let album_name = process_param(params.album_name.as_deref());
 
   // Generate a cache key based on query parameters
   let cache_key = format!(

@@ -1,14 +1,15 @@
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 use indoc::indoc;
-use crate::utils::prepare_input;
 use chrono::prelude::*;
 
-pub fn get_track_id_by_metadata(track_name: &str, artist_name: &str, album_name: &str, duration: f64, conn: &mut Connection) -> Result<Option<i64>> {
-  let track_name_lower = prepare_input(track_name);
-  let artist_name_lower = prepare_input(artist_name);
-  let album_name_lower = prepare_input(album_name);
-
+pub fn get_track_id_by_metadata(
+  track_name_lower: &str,
+  artist_name_lower: &str,
+  album_name_lower: &str,
+  duration: f64,
+  conn: &mut Connection,
+) -> Result<Option<i64>> {
   let query = indoc! {"
     SELECT
       missing_tracks.id
@@ -37,13 +38,12 @@ pub fn add_one(
   track_name: &str,
   artist_name: &str,
   album_name: &str,
+  track_name_lower: &str,
+  artist_name_lower: &str,
+  album_name_lower: &str,
   duration: f64,
   conn: &mut Connection,
 ) -> Result<i64> {
-  let track_name_lower = prepare_input(track_name);
-  let artist_name_lower = prepare_input(artist_name);
-  let album_name_lower = prepare_input(album_name);
-
   let now = Utc::now();
   let query = indoc! {"
     INSERT INTO missing_tracks (
@@ -77,10 +77,10 @@ pub fn add_one(
 }
 
 pub fn clean_old_missing_tracks(conn: &mut Connection) -> Result<()> {
-  // Delete all missing tracks older than 7 days
+  // Delete all missing tracks older than 14 days
   let query = indoc! {"
     DELETE FROM missing_tracks
-    WHERE created_at < DATETIME('now', '-30 day')
+    WHERE created_at < DATETIME('now', '-14 day')
     LIMIT 10000
   "};
   let mut statement = conn.prepare(query)?;

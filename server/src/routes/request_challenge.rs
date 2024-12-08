@@ -1,9 +1,9 @@
 use axum::{extract::State, Json};
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 use anyhow::Result;
-use crate::{errors::ApiError, repositories::lyrics_repository::get_last_10_mins_lyrics_count, AppState};
+use crate::{errors::ApiError, AppState};
 use num_bigint::BigUint;
 
 #[derive(Serialize)]
@@ -29,10 +29,7 @@ async fn generate_challenge(state: &Arc<AppState>) -> Result<Challenge> {
     .take(32)
     .map(char::from)
     .collect();
-  let last_10_mins_lyrics_count = {
-    let mut conn = state.pool.get()?;
-    get_last_10_mins_lyrics_count(&mut conn)?
-  };
+  let last_10_mins_lyrics_count = state.recent_lyrics_count.load(Ordering::Relaxed);
   let base_target = b"000000FF00000000000000000000000000000000000000000000000000000000".to_owned();
   let base_submit_count = 100;
   let base_target_big_uint = BigUint::parse_bytes(&base_target, 16).unwrap();

@@ -101,7 +101,7 @@ async fn process_lyrics_result(missing_track: &MissingTrack, data: Option<Scrape
       ),
     }
   } else {
-    tracing::info!(
+    tracing::debug!(
       message = format!("no lyrics found"),
       track_name = missing_track.name,
       artist_name = missing_track.artist_name,

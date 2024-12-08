@@ -113,15 +113,12 @@ pub fn get_track_id_by_metadata_tx(track_name: &str, artist_name: &str, album_na
 }
 
 pub fn get_track_by_metadata(
-  track_name: &str,
-  artist_name: &str,
-  album_name: Option<&str>,
+  track_name_lower: &str,
+  artist_name_lower: &str,
+  album_name_lower: Option<&str>,
   duration: Option<f64>,
   conn: &mut Connection,
 ) -> Result<Option<SimpleTrack>> {
-  let track_name_lower = prepare_input(track_name);
-  let artist_name_lower = prepare_input(artist_name);
-
   // Start building the SQL query
   let select_query = indoc! {"
     SELECT
@@ -145,8 +142,8 @@ pub fn get_track_by_metadata(
     "tracks.artist_name_lower = ?".to_string(),
   ];
   let mut params: Vec<rusqlite::types::Value> = vec![
-    track_name_lower.into(),
-    artist_name_lower.into(),
+    track_name_lower.to_string().into(),
+    artist_name_lower.to_string().into(),
   ];
 
   // Conditionally add duration constraints
@@ -160,12 +157,9 @@ pub fn get_track_by_metadata(
   }
 
   // Conditionally add album_name to the query
-  if let Some(album_name_lower) = album_name
-    .map(|s| prepare_input(s))
-    .filter(|s| !s.is_empty())
-  {
+  if let Some(album_name_lower) = album_name_lower {
     where_clauses.push("tracks.album_name_lower = ?".to_string());
-    params.push(album_name_lower.into());
+    params.push(album_name_lower.to_string().into());
   }
 
   // Combine all parts of the query

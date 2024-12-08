@@ -9,7 +9,7 @@ use axum::{
   Router,
 };
 use entities::missing_track::MissingTrack;
-use repositories::missing_track_repository::clean_old_missing_tracks;
+use repositories::lyrics_repository::get_last_10_mins_lyrics_count;
 use tracing_subscriber::EnvFilter;
 use std::{path::PathBuf, time::Duration};
 use r2d2::Pool;
@@ -46,9 +46,11 @@ pub mod providers;
 pub struct AppState {
   pool: Pool<SqliteConnectionManager>,
   challenge_cache: Cache<String, String>,
+  get_cache: Cache<String, String>,
   search_cache: Cache<String, String>,
   queue: ArrayQueue<MissingTrack>,
   request_counter: AtomicUsize,
+  recent_lyrics_count: AtomicUsize,
 }
 
 pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
@@ -66,6 +68,10 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
         .time_to_live(Duration::from_secs(60 * 5))
         .max_capacity(100000)
         .build(),
+      get_cache: Cache::<String, String>::builder()
+        .time_to_live(Duration::from_secs(60 * 60 * 24 * 7))
+        .max_capacity(5000000)
+        .build(),
       search_cache: Cache::<String, String>::builder()
         .time_to_live(Duration::from_secs(60 * 60 * 24))
         .time_to_idle(Duration::from_secs(60 * 60 * 4))
@@ -73,12 +79,13 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
         .build(),
       queue: ArrayQueue::new(600000),
       request_counter: AtomicUsize::new(0),
+      recent_lyrics_count: AtomicUsize::new(0),
     }
   );
 
   let state_for_logging = state.clone();
   let state_for_metrics = state.clone();
-  let state_for_clean_up = state.clone();
+  let state_for_recent_lyrics_count = state.clone();
   let state_for_queue = state.clone();
 
   let api_routes = Router::new()
@@ -100,21 +107,15 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
     }
   });
 
-  // Clean up old missing tracks
+  // Recent lyrics count
   tokio::spawn(async move {
-    let mut interval = tokio::time::interval(Duration::from_secs(60 * 60 * 2));
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
     loop {
       interval.tick().await;
-      match state_for_clean_up.pool.get() {
-        Ok(mut conn) => {
-          if let Err(e) = clean_old_missing_tracks(&mut conn) {
-            tracing::error!(message = "failed to clean old missing tracks", error = e.to_string());
-          }
-        }
-        Err(e) => {
-          tracing::error!(message = "failed to get database connection", error = e.to_string());
-        }
-      }
+      let mut conn = state_for_recent_lyrics_count.pool.get().unwrap();
+      let count = get_last_10_mins_lyrics_count(&mut conn).unwrap();
+      state_for_recent_lyrics_count.recent_lyrics_count.store(count as usize, Ordering::Relaxed);
     }
   });
 
@@ -140,11 +141,20 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
           let status_code = response.status().as_u16();
           let latency = latency.as_millis();
 
-          tracing::debug!(
-            message = "finished processing request",
-            latency = latency,
-            status_code = status_code,
-          )
+          if latency > 500 {
+            tracing::info!(
+              message = "finished processing request",
+              slow = true,
+              latency = latency,
+              status_code = status_code,
+            )
+          } else {
+            tracing::debug!(
+              message = "finished processing request",
+              latency = latency,
+              status_code = status_code,
+            )
+          }
         })
         .on_failure(trace::DefaultOnFailure::new().level(tracing::Level::ERROR))
         .on_request(move |_request: &Request<Body>, _span: &Span| {
