@@ -5,6 +5,7 @@ use crate::{
     entities::{missing_track::MissingTrack, track::SimpleTrack},
     errors::ApiError,
     repositories::{track_repository::get_track_by_metadata, missing_track_repository},
+    utils::process_param,
     AppState,
 };
 use axum_macros::debug_handler;
@@ -47,8 +48,10 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
   }
 
   // Retry fetching the track without the album name
-  if let Some(track) = fetch_track_without_album(&params, &state).await? {
-    return Ok(Json(create_response(track)));
+  if let Some(_) = process_param(&params.album_name) {
+    if let Some(track) = fetch_track_without_album(&params, &state).await? {
+      return Ok(Json(create_response(track)));
+    }
   }
 
   // If not found, handle missing track logic

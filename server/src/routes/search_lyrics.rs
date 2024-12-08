@@ -3,7 +3,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use crate::{
-  entities::track::SimpleTrack, errors::ApiError, repositories::track_repository::get_tracks_by_keyword, utils::prepare_input, AppState
+  entities::track::SimpleTrack,
+  errors::ApiError,
+  repositories::track_repository::get_tracks_by_keyword,
+  utils::process_param,
+  AppState,
 };
 
 // Query parameters
@@ -160,12 +164,4 @@ async fn fetch_and_cache_tracks(
   state.search_cache.insert(cache_key, serde_json::to_string(&cached_result)?).await;
 
   Ok(response)
-}
-
-fn process_param(param: &Option<String>) -> Option<String> {
-  param
-    .as_ref()
-    .map(|s| prepare_input(s))
-    .filter(|s| !s.is_empty())
-    .map(|s| s.to_owned())
 }

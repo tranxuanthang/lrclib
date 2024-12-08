@@ -81,3 +81,11 @@ pub fn verify_answer(prefix: &str, target: &str, nonce: &str) -> bool {
 
   true
 }
+
+pub fn process_param(param: &Option<String>) -> Option<String> {
+  param
+    .as_ref()
+    .map(|s| prepare_input(s))
+    .filter(|s| !s.is_empty())
+    .map(|s| s.to_owned())
+}

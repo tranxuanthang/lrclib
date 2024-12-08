@@ -214,9 +214,11 @@ pub fn get_tracks_by_keyword(
     return Ok(vec![])
   }
 
-  // Determine whether to include ORDER BY rank based on the number of words in q
+  // Determine whether to include ORDER BY rank based on the number of words in q or track_name
   let is_ordered = if let Some(query) = q {
     query.split_whitespace().count() > 3
+  } else if let (Some(track_name), None, None) = (track_name, artist_name, album_name) {
+    track_name.split_whitespace().count() > 3
   } else {
     true
   };
