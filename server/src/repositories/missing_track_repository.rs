@@ -75,3 +75,15 @@ pub fn add_one(
   )?;
   Ok(row_id)
 }
+
+pub fn clean_old_missing_tracks(conn: &mut Connection) -> Result<()> {
+  // Delete all missing tracks older than 7 days
+  let query = indoc! {"
+    DELETE FROM missing_tracks
+    WHERE created_at < DATETIME('now', '-30 day')
+    LIMIT 10000
+  "};
+  let mut statement = conn.prepare(query)?;
+  statement.execute(())?;
+  Ok(())
+}

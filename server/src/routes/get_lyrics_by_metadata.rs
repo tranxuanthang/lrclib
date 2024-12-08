@@ -47,13 +47,6 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
     return Ok(Json(create_response(track)));
   }
 
-  // Retry fetching the track without the album name
-  if let Some(_) = process_param(&params.album_name) {
-    if let Some(track) = fetch_track_without_album(&params, &state).await? {
-      return Ok(Json(create_response(track)));
-    }
-  }
-
   // If not found, handle missing track logic
   let params_clone = params.clone();
   let state_clone = state.clone();
@@ -62,6 +55,13 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
       tracing::error!(message = "failed to handle missing track", error = e.to_string());
     }
   });
+
+  // Retry fetching the track without the album name
+  if let Some(_) = process_param(&params.album_name) {
+    if let Some(track) = fetch_track_without_album(&params, &state).await? {
+      return Ok(Json(create_response(track)));
+    }
+  }
 
   Err(ApiError::TrackNotFoundError)
 }

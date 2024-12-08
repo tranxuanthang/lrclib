@@ -16,3 +16,4 @@ CREATE INDEX idx_missing_tracks_name_lower ON missing_tracks (name_lower);
 CREATE INDEX idx_missing_tracks_artist_name_lower ON missing_tracks (artist_name_lower);
 CREATE INDEX idx_missing_tracks_album_name_lower ON missing_tracks (album_name_lower);
 CREATE INDEX idx_missing_tracks_duration ON missing_tracks (duration);
+CREATE INDEX idx_missing_tracks_created_at ON missing_tracks (created_at);

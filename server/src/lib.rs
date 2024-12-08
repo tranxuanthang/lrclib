@@ -9,6 +9,7 @@ use axum::{
   Router,
 };
 use entities::missing_track::MissingTrack;
+use repositories::missing_track_repository::clean_old_missing_tracks;
 use tracing_subscriber::EnvFilter;
 use std::{path::PathBuf, time::Duration};
 use r2d2::Pool;
@@ -77,6 +78,7 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
 
   let state_for_logging = state.clone();
   let state_for_metrics = state.clone();
+  let state_for_clean_up = state.clone();
   let state_for_queue = state.clone();
 
   let api_routes = Router::new()
@@ -87,6 +89,7 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
     .route("/publish", post(publish_lyrics::route))
     .route("/flag", post(flag_lyrics::route));
 
+  // Metrics
   tokio::spawn(async move {
     tokio::time::sleep(Duration::from_secs(60)).await;
     let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -94,6 +97,24 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
       interval.tick().await;
       let count = state_for_metrics.request_counter.swap(0, Ordering::Relaxed);
       tracing::info!(message = "requests in the last minute", requests_count = count);
+    }
+  });
+
+  // Clean up old missing tracks
+  tokio::spawn(async move {
+    let mut interval = tokio::time::interval(Duration::from_secs(60 * 60 * 2));
+    loop {
+      interval.tick().await;
+      match state_for_clean_up.pool.get() {
+        Ok(mut conn) => {
+          if let Err(e) = clean_old_missing_tracks(&mut conn) {
+            tracing::error!(message = "failed to clean old missing tracks", error = e.to_string());
+          }
+        }
+        Err(e) => {
+          tracing::error!(message = "failed to get database connection", error = e.to_string());
+        }
+      }
     }
   });
 
