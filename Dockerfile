@@ -1,4 +1,4 @@
-FROM docker.io/rust:1.77.2-alpine3.19 as chef
+FROM docker.io/rust:1.78-alpine3.19 as chef
 RUN apk add --no-cache alpine-sdk
 RUN cargo install cargo-chef
 WORKDIR /usr/src/lrclib
