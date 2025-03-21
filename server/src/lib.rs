@@ -42,6 +42,7 @@ pub mod utils;
 pub mod db;
 pub mod queue;
 pub mod providers;
+pub mod models;
 
 pub struct AppState {
   pool: Pool<SqliteConnectionManager>,
