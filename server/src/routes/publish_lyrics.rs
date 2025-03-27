@@ -28,6 +28,8 @@ pub struct PublishRequest {
     duration: f64,
     plain_lyrics: Option<String>,
     synced_lyrics: Option<String>,
+    #[serde(default)]
+    no_replace: bool,
 }
 
 #[debug_handler]
@@ -41,12 +43,12 @@ pub async fn route(
       let is_valid = is_valid_publish_token(publish_token.to_str()?, &state.challenge_cache).await;
 
       if is_valid {
-        {
+        let status_code = {
           let mut conn = state.pool.get()?;
-          publish_lyrics(&payload, &mut conn)?;
-        }
+          publish_lyrics(&payload, &mut conn)?
+        };
 
-        Ok(StatusCode::CREATED)
+        Ok(status_code)
       } else {
         Err(ApiError::IncorrectPublishTokenError)
       }
@@ -55,7 +57,7 @@ pub async fn route(
   }
 }
 
-fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<()> {
+fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<StatusCode> {
   let mut tx = conn.transaction()?;
 
   let existing_track = track_repository::get_track_id_by_metadata_tx(
@@ -76,6 +78,33 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<()>
       &mut tx,
     )?
   };
+
+  // If the client doesn't want to replace the existing lyrics, bail now
+  if payload.no_replace {
+    let track = track_repository::get_track_by_id_tx(track_id, &mut tx)?
+      .expect("track either existed or was added");
+    let already_exists = match track.last_lyrics {
+      // use truth table to determine if track has relevant lyrics
+      Some(lyrics) => match (
+        &lyrics.plain_lyrics,
+        &lyrics.synced_lyrics,
+        &payload.synced_lyrics,
+      ) {
+        // no lyrics in DB for this track
+        (None, None, _) => false,
+        // special case: new synced lyrics still take priority over existing plain lyrics
+        (_, None, Some(_)) => false,
+        // the DB holds synced lyrics for this track
+        (_, Some(_), _) => true,
+        // there are only plain lyrics in DB and no sync lyrics in payload
+        (Some(_), None, None) => todo!(),
+      },
+      None => false,
+    };
+    if already_exists {
+      return Ok(StatusCode::CONFLICT);
+    }
+  }
 
   let mut plain_lyrics = payload.plain_lyrics.as_ref().filter(|s| !s.is_empty()).map(|s| s.to_owned());
   let synced_lyrics = payload.synced_lyrics.as_ref().filter(|s| !s.is_empty()).map(|s| s.to_owned());
@@ -112,5 +141,5 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<()>
 
   tx.commit()?;
 
-  Ok(())
+  Ok(StatusCode::CREATED)
 }

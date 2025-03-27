@@ -54,6 +54,52 @@ pub fn get_track_by_id(track_id: i64, conn: &mut Connection) -> Result<Option<Si
   Ok(row)
 }
 
+pub fn get_track_by_id_tx(track_id: i64, conn: &mut Transaction) -> Result<Option<SimpleTrack>> {
+  let query = indoc! {"
+    SELECT
+      tracks.id,
+      tracks.name,
+      tracks.album_name,
+      tracks.artist_name,
+      tracks.duration,
+      tracks.last_lyrics_id,
+      lyrics.instrumental,
+      lyrics.plain_lyrics,
+      lyrics.synced_lyrics
+    FROM
+      tracks
+      LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
+    WHERE
+      tracks.id = ?
+  "};
+  let mut statement = conn.prepare(query)?;
+  let row = statement.query_row(
+    [track_id],
+    |row| {
+      let instrumental = match row.get("instrumental")? {
+        Some(value) => value,
+        None => false
+      };
+
+      let last_lyrics = SimpleLyrics {
+        plain_lyrics: row.get("plain_lyrics")?,
+        synced_lyrics: row.get("synced_lyrics")?,
+        instrumental,
+      };
+
+      Ok(SimpleTrack {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        artist_name: row.get("artist_name")?,
+        album_name: row.get("album_name")?,
+        duration: row.get("duration")?,
+        last_lyrics: Some(last_lyrics),
+      })
+    }
+  ).optional()?;
+  Ok(row)
+}
+
 pub fn get_track_id_by_metadata(track_name: &str, artist_name: &str, album_name: &str, duration: f64, conn: &mut Connection) -> Result<Option<i64>> {
   let track_name_lower = prepare_input(track_name);
   let artist_name_lower = prepare_input(artist_name);
