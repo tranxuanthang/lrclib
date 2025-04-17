@@ -7,6 +7,7 @@ use crate::{
     errors::ApiError,
     repositories::track_repository::get_track_by_metadata,
     utils::process_param,
+    models::priority::Priority,
     AppState,
 };
 use axum_macros::debug_handler;
@@ -23,6 +24,7 @@ pub struct QueryParams {
   album_name: Option<String>,
   #[validate(range(min = 1.0, max = 3600.0, message = "must be between 1 and 3600"))]
   duration: Option<f64>,
+  prioritize: Option<Priority>,
 }
 
 #[derive(Serialize)]
@@ -52,7 +54,7 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
 
   if let (Some(track_name_lower), Some(artist_name_lower)) = (track_name_lower, artist_name_lower) {
     // Attempt to fetch the track with all provided metadata
-    if let Some(track) = fetch_track(&track_name_lower, &artist_name_lower, album_name_lower.as_deref(), params.duration, &mut conn).await? {
+    if let Some(track) = fetch_track(&track_name_lower, &artist_name_lower, album_name_lower.as_deref(), params.duration, params.prioritize, &mut conn).await? {
       return Ok(Json(create_response(track)));
     }
 
@@ -72,12 +74,13 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
   Err(ApiError::TrackNotFoundError)
 }
 
-async fn fetch_track(track_name_lower: &str, artist_name_lower: &str, album_name_lower: Option<&str>, duration: Option<f64>, conn: &mut Connection) -> Result<Option<SimpleTrack>> {
+async fn fetch_track(track_name_lower: &str, artist_name_lower: &str, album_name_lower: Option<&str>, duration: Option<f64>, priority: Option<Priority>, conn: &mut Connection) -> Result<Option<SimpleTrack>> {
   get_track_by_metadata(
     track_name_lower,
     artist_name_lower,
     album_name_lower,
     duration,
+    priority,
     conn,
   )
 }

@@ -4,6 +4,7 @@ use indoc::indoc;
 use crate::{
   entities::{lyrics::SimpleLyrics, track::SimpleTrack},
   utils::prepare_input,
+  models::priority::Priority,
 };
 use chrono::prelude::*;
 use rusqlite::params_from_iter;
@@ -117,6 +118,7 @@ pub fn get_track_by_metadata(
   artist_name_lower: &str,
   album_name_lower: Option<&str>,
   duration: Option<f64>,
+  priority: Option<Priority>,
   conn: &mut Connection,
 ) -> Result<Option<SimpleTrack>> {
   // Start building the SQL query
@@ -162,11 +164,22 @@ pub fn get_track_by_metadata(
     params.push(album_name_lower.to_string().into());
   }
 
+  // Put tracks with synced or plain lyrics at the beginning
+  let mut order_clauses = vec![];
+  if let Some(priority) = priority {
+    match priority {
+      Priority::Synced => order_clauses.push("lyrics.has_synced_lyrics IS 0".to_string()),
+      Priority::Plain => order_clauses.push("lyrics.has_plain_lyrics IS 0".to_string())
+    }
+  }
+
   // Combine all parts of the query
+  order_clauses.push("lyrics.id".to_string());
   let query = format!(
-    "{select} WHERE {where_clause} ORDER BY tracks.id",
+    "{select} WHERE {where_clause} ORDER BY {order_clause}",
     select = select_query,
-    where_clause = where_clauses.join(" AND ")
+    where_clause = where_clauses.join(" AND "),
+    order_clause = order_clauses.join(", ")
   );
 
   // Prepare and execute the statement
@@ -201,6 +214,7 @@ pub fn get_tracks_by_keyword(
   track_name: Option<&str>,
   artist_name: Option<&str>,
   album_name: Option<&str>,
+  priority: Option<Priority>,
   conn: &mut Connection,
 ) -> Result<Vec<SimpleTrack>> {
   // To search track by keyword, at least q or track_name must be present
@@ -224,6 +238,15 @@ pub fn get_tracks_by_keyword(
     indoc! {"SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ? LIMIT 20"}.to_string()
   };
 
+  // Put tracks with synced or plain lyrics at the beginning
+  let mut order_clauses = vec![];
+  if let Some(priority) = priority {
+    match priority {
+      Priority::Synced => order_clauses.push("lyrics.has_synced_lyrics IS 0"),
+      Priority::Plain => order_clauses.push("lyrics.has_plain_lyrics IS 0")
+    }
+  };
+
   // Build the complete query using the subquery
   let query = format!(
     "SELECT
@@ -239,8 +262,10 @@ pub fn get_tracks_by_keyword(
       ({subquery}) AS search_results
       LEFT JOIN tracks ON search_results.rowid = tracks.id
       LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
+      {order_clause}
     ",
-    subquery = subquery
+    subquery = subquery,
+    order_clause = if !order_clauses.is_empty() { format!("ORDER BY {}", order_clauses.join(", ")) } else { String::new() }
   );
 
   let mut statement = conn.prepare(&query)?;

@@ -7,6 +7,7 @@ use crate::{
   errors::ApiError,
   repositories::track_repository::get_tracks_by_keyword,
   utils::process_param,
+  models::priority::Priority,
   AppState,
 };
 
@@ -17,6 +18,7 @@ pub struct QueryParams {
   track_name: Option<String>,
   artist_name: Option<String>,
   album_name: Option<String>,
+  prioritize: Option<Priority>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -44,14 +46,21 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
   let track_name = process_param(params.track_name.as_deref());
   let artist_name = process_param(params.artist_name.as_deref());
   let album_name = process_param(params.album_name.as_deref());
+  let priority = params.prioritize;
+
+  let priority_str = match priority {
+    Some(p) => p.to_string(),
+    None => String::new(),
+  };
 
   // Generate a cache key based on query parameters
   let cache_key = format!(
-    "{}:{}:{}:{}",
+    "{}:{}:{}:{}:{}",
     q.as_deref().unwrap_or_default(),
     track_name.as_deref().unwrap_or_default(),
     artist_name.as_deref().unwrap_or_default(),
-    album_name.as_deref().unwrap_or_default()
+    album_name.as_deref().unwrap_or_default(),
+    priority_str
   );
 
   let cached_result: Option<CachedResult> = {
@@ -85,6 +94,7 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
           track_name_clone.as_deref(),
           artist_name_clone.as_deref(),
           album_name_clone.as_deref(),
+          priority,
         ).await;
       });
     }
@@ -99,6 +109,7 @@ pub async fn route(Query(params): Query<QueryParams>, State(state): State<Arc<Ap
     track_name.as_deref(),
     artist_name.as_deref(),
     album_name.as_deref(),
+    priority
   ).await?;
 
   Ok(Json(response))
@@ -144,6 +155,7 @@ async fn fetch_and_cache_tracks(
   track_name: Option<&str>,
   artist_name: Option<&str>,
   album_name: Option<&str>,
+  priority: Option<Priority>
 ) -> Result<Vec<TrackResponse>, ApiError> {
   let mut conn = state.pool.get()?;
   let tracks = get_tracks_by_keyword(
@@ -151,6 +163,7 @@ async fn fetch_and_cache_tracks(
       track_name,
       artist_name,
       album_name,
+      priority,
       &mut conn,
   )?;
 
