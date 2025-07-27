@@ -11,6 +11,7 @@ pub struct Track {
   pub last_lyrics: Option<SimpleLyrics>,
   pub created_at: Option<DateTime<Utc>>,
   pub updated_at: Option<DateTime<Utc>>,
+  pub isrcs: Option<Vec<String>>,
 }
 
 pub struct SimpleTrack {
@@ -20,4 +21,5 @@ pub struct SimpleTrack {
   pub artist_name: Option<String>,
   pub duration: Option<f64>,
   pub last_lyrics: Option<SimpleLyrics>,
+  pub isrcs: Option<Vec<String>>,
 }

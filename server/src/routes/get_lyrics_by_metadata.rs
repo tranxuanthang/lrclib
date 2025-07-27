@@ -37,6 +37,7 @@ pub struct TrackResponse {
   instrumental: bool,
   plain_lyrics: Option<String>,
   synced_lyrics: Option<String>,
+  isrcs: Option<Vec<String>>,
 }
 
 #[debug_handler]
@@ -147,6 +148,7 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
     instrumental,
     plain_lyrics,
     synced_lyrics,
+    isrcs: track.isrcs.to_owned(),
   }
 }
 

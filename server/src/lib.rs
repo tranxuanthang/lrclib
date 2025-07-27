@@ -17,10 +17,12 @@ use r2d2_sqlite::SqliteConnectionManager;
 use routes::{
   get_lyrics_by_metadata,
   get_lyrics_by_track_id,
+  get_lyrics_by_isrc,
   search_lyrics,
   request_challenge,
   publish_lyrics,
   flag_lyrics,
+  submit_isrcs
 };
 use std::sync::Arc;
 use db::init_db;
@@ -91,11 +93,12 @@ pub async fn serve(port: u16, database: &PathBuf, workers_count: u8) {
   let api_routes = Router::new()
     .route("/get", get(get_lyrics_by_metadata::route))
     .route("/get/:track_id", get(get_lyrics_by_track_id::route))
+    .route("/get/isrc/:isrc", get(get_lyrics_by_isrc::route))
     .route("/search", get(search_lyrics::route))
     .route("/request-challenge", post(request_challenge::route))
     .route("/publish", post(publish_lyrics::route))
-    .route("/flag", post(flag_lyrics::route));
-
+    .route("/flag", post(flag_lyrics::route))
+    .route("/submit-isrcs", post(submit_isrcs::route));
   // Metrics
   tokio::spawn(async move {
     tokio::time::sleep(Duration::from_secs(60)).await;
@@ -191,16 +194,22 @@ async fn shutdown_signal() {
             .expect("failed to install Ctrl+C handler");
     };
 
-    #[cfg(unix)]
-    let terminate = async {
+    #[cfg(unix)] {
+      let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
             .expect("failed to install signal handler")
             .recv()
             .await;
-    };
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+      };
+      tokio::select! {
+          _ = ctrl_c => {},
+          _ = terminate => {},
+      }
     }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await;
+    }
+
 }

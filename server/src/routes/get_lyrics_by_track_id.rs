@@ -15,6 +15,7 @@ pub struct TrackResponse {
   instrumental: bool,
   plain_lyrics: Option<String>,
   synced_lyrics: Option<String>,
+  isrcs: Option<Vec<String>>,
 }
 
 pub async fn route(Path(track_id): Path<i64>, State(state): State<Arc<AppState>>) -> Result<Json<TrackResponse>, ApiError> {
@@ -59,5 +60,6 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
     instrumental,
     plain_lyrics,
     synced_lyrics,
+    isrcs: track.isrcs.to_owned(),
   }
 }

@@ -121,6 +121,7 @@ async fn add_found(missing_track: &MissingTrack, data: &ScrapedData, conn: &mut 
     &missing_track.artist_name.trim(),
     &missing_track.album_name.trim(),
     missing_track.duration,
+    None,
     &mut tx,
   )?;
 

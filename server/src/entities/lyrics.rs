@@ -11,6 +11,7 @@ pub struct Lyrics {
   pub source: Option<String>,
   pub created_at: Option<DateTime<Utc>>,
   pub updated_at: Option<DateTime<Utc>>,
+  pub isrcs: Option<Vec<String>>,
 }
 
 pub struct SimpleLyrics {

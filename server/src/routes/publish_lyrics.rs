@@ -28,6 +28,7 @@ pub struct PublishRequest {
     duration: f64,
     plain_lyrics: Option<String>,
     synced_lyrics: Option<String>,
+    isrcs: Option<Vec<String>>,
 }
 
 #[debug_handler]
@@ -73,6 +74,7 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<()>
       &payload.artist_name.trim(),
       &payload.album_name.trim(),
       payload.duration,
+      payload.isrcs.clone(),
       &mut tx,
     )?
   };
