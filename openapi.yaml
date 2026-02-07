@@ -197,11 +197,11 @@ components:
     Error:
       type: object
       required:
-        - code
+        - statusCode
         - message
         - name
       properties:
-        code:
+        statusCode:
           type: integer
           description: Error code
           example: 404
