@@ -38,3 +38,5 @@ num-bigint = "0.4.6"
 crossbeam-queue = "0.3"
 subtle = "2.6.1"
 dashmap = "6.1.0"
+rmcp = { version = "2.2.0", features = ["server", "macros", "transport-streamable-http-server"] }
+schemars = "1.2.1"

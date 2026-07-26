@@ -78,6 +78,8 @@ Routes are mounted under `/api` in `server/src/lib.rs`.
 - `POST /api/flag`: flag current lyrics for a track.
 - `POST /api/manage/set-config`: update queue worker count.
 
+`/mcp` is a separate, non-REST endpoint: a Model Context Protocol (Streamable HTTP) server, see "MCP" below.
+
 ## Main Request Paths
 
 ### `GET /api/get`
@@ -164,6 +166,21 @@ If you change matching behavior, review both:
 
 - `utils::prepare_input`
 - repository metadata queries and FTS usage
+
+## MCP
+
+`server/src/mcp.rs` exposes a read-only Model Context Protocol server over Streamable HTTP, mounted at `/mcp` in `build_router` (`server/src/lib.rs`) alongside `/api`. It shares the same `TraceLayer`/`CorsLayer` and is unauthenticated, same as the read endpoints under `/api`.
+
+- `LrclibMcpServer` holds an `Arc<AppState>` and is constructed fresh per MCP session by `rmcp`'s `StreamableHttpService` factory.
+- `rmcp`'s DNS-rebinding protection (`Host` header allowlist, loopback-only by default) is disabled via `StreamableHttpServerConfig::disable_allowed_hosts()`, matching the open-CORS trust model of `/api`: the server is expected to run behind arbitrary reverse proxies/hostnames.
+- Tools (via `#[tool_router]`/`#[tool]`, `rmcp` crate):
+  - `get_lyrics`: mirrors `GET /api/get` (track/artist/album/duration).
+  - `get_lyrics_by_id`: mirrors `GET /api/get/:track_id`.
+  - `search_lyrics`: mirrors `GET /api/search`, returns `{ tracks: [...] }` (MCP tool output schemas must be a JSON object at the root, so results are wrapped rather than returned as a bare array).
+- `mcp::TrackResponse` deliberately omits the `lyricsfile` raw-YAML field present on the REST `TrackResponse` structs: it's a redundant re-encoding of `plainLyrics`/`syncedLyrics`/`instrumental` with no extra information for a model to act on, so it's stripped to save tokens/context.
+- Tools call `repositories::track_repository` functions directly through `AppState::db_connection()`. They deliberately do **not** go through the HTTP-only `get_metadata_cache`/`search_cache` (those are keyed by cache-key builders private to the `/api` route handlers); MCP traffic is expected to be much lower than public HTTP traffic, so this was kept simple rather than sharing/refactoring the caching layer.
+- Each tool declares a `title` and `annotations(read_only_hint = true, open_world_hint = false)` (all three only read LRCLIB's own dataset, no side effects). `outputSchema` is derived automatically by `rmcp` from each tool's `Json<T>` return type.
+- Publish/flag are intentionally not exposed as MCP tools: they require a proof-of-work challenge/token flow (`request_challenge`, `utils::is_valid_publish_token`) that doesn't map cleanly onto a single tool call.
 
 ## Queue Status
 

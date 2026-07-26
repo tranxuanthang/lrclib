@@ -30,6 +30,24 @@ You have two environment variables available to tweak the database connection:
 
 Use these variables to optimize memory usage in low traffic and/or low memory situations. The default values are generously sized to be used on a production system.
 
+## MCP support
+
+Alongside the REST API, the server exposes a read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` (Streamable HTTP transport), so MCP-aware clients (e.g. Claude) can look up lyrics directly as tools instead of calling the REST API by hand. It runs on the same host/port as the rest of the API and requires no extra setup.
+
+Tools exposed: `get_lyrics` (by track/artist/album/duration), `get_lyrics_by_id` (by numeric track id), `search_lyrics` (free-text search). Publishing/flagging lyrics is intentionally not exposed over MCP.
+
+Example client config, pointing at a locally running server:
+
+```json
+{
+  "mcpServers": {
+    "lrclib": {
+      "url": "http://localhost:3300/mcp"
+    }
+  }
+}
+```
+
 ## Setup with Podman/Docker
 
 ### Basic
@@ -55,6 +73,16 @@ Run the following command to directly interact with the database in command line
 ```
 podman run --rm -it -v lrclib-data:/data lrclib-rs:latest sqlite3 /data/db.sqlite3
 ```
+
+### Docker Compose
+
+A `docker-compose.yml` is included, building the image locally and bind-mounting `./lrclib-data` (containing `db.sqlite3`) to `/data`:
+
+```
+docker compose up -d --build
+```
+
+Server will be available at http://0.0.0.0:3300. Edit `docker-compose.yml` to change the port mapping or set `LRCLIB_MMAP_SIZE`/`LRCLIB_CACHE_SIZE`/`LRCLIB_MANAGE_TOKEN`/`LRCLIB_WORKERS_COUNT`.
 
 ### Quadlet
 

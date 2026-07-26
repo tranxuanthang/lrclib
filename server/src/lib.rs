@@ -9,11 +9,15 @@ use crossbeam_queue::ArrayQueue;
 use dashmap::DashMap;
 use db::init_db;
 use entities::missing_track::MissingTrack;
+use mcp::LrclibMcpServer;
 use moka::future::Cache;
 use r2d2::Pool;
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use repositories::lyrics_repository::get_last_10_mins_lyrics_count;
+use rmcp::transport::streamable_http_server::{
+    session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+};
 use routes::get_lyrics_by_metadata::TrackResponse as GetLyricsByMetadataResponse;
 use routes::search_lyrics::CachedResult;
 use routes::{
@@ -37,6 +41,7 @@ use tracing_subscriber::EnvFilter;
 pub mod db;
 pub mod entities;
 pub mod errors;
+pub mod mcp;
 #[path = "queue_stub.rs"]
 pub mod queue;
 pub mod repositories;
@@ -124,8 +129,22 @@ fn build_router(state: Arc<AppState>, state_for_logging: Arc<AppState>) -> Route
     // Add management routes to the API router
     let api_routes = api_routes.nest("/manage", manage_routes);
 
+    // Build the MCP (Model Context Protocol) service, sharing the same AppState
+    let mcp_service = StreamableHttpService::new(
+        {
+            let state = state.clone();
+            move || Ok(LrclibMcpServer::new(state.clone()))
+        },
+        LocalSessionManager::default().into(),
+        // Same trust model as the rest of the public API (open CORS, no Host allowlist):
+        // this server is designed to run behind arbitrary reverse proxies, so the
+        // default loopback-only `Host` allowlist (DNS-rebinding protection) is disabled.
+        StreamableHttpServerConfig::default().disable_allowed_hosts(),
+    );
+
     Router::new()
         .nest("/api", api_routes)
+        .nest_service("/mcp", mcp_service)
         .with_state(state)
         .layer(
             TraceLayer::new_for_http()

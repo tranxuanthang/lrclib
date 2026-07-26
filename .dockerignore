@@ -1,3 +1,4 @@
 /target
 /*.sqlite3*
 /queue-data*
+/lrclib-data

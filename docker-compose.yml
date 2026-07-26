@@ -1,0 +1,16 @@
+services:
+  lrclib:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3300:3300"
+    volumes:
+      - ./lrclib-data:/data
+    environment:
+      LRCLIB_LOG: info
+      # LRCLIB_MMAP_SIZE: "30000000000"
+      # LRCLIB_CACHE_SIZE: "-1000000"
+      # LRCLIB_MANAGE_TOKEN: ""
+      # LRCLIB_WORKERS_COUNT: "0"
+    restart: unless-stopped
