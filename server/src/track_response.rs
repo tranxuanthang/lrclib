@@ -12,12 +12,12 @@ pub struct TrackResponse {
     pub artist_name: Option<String>,
     pub album_name: Option<String>,
     pub duration: Option<f64>,
+    pub lyrics_id: Option<i64>,
     pub instrumental: bool,
     pub plain_lyrics: Option<String>,
     pub synced_lyrics: Option<String>,
     pub lyricsfile: Option<String>,
 }
-
 
 pub fn create_track_response(track: SimpleTrack) -> TrackResponse {
     let plain_lyrics = match track.last_lyrics {
@@ -40,6 +40,11 @@ pub fn create_track_response(track: SimpleTrack) -> TrackResponse {
         None => None,
     };
 
+    let lyrics_id = match track.last_lyrics {
+        Some(ref lyrics) => Some(lyrics.lyrics_id),
+        None => None,
+    };
+
     TrackResponse {
         id: track.id,
         name: track.name.to_owned(),
@@ -47,6 +52,7 @@ pub fn create_track_response(track: SimpleTrack) -> TrackResponse {
         artist_name: track.artist_name.to_owned(),
         album_name: track.album_name.to_owned(),
         duration: track.duration,
+        lyrics_id,
         instrumental,
         plain_lyrics,
         synced_lyrics,

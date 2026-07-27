@@ -36,6 +36,7 @@ pub fn get_track_by_id(track_id: i64, conn: &mut Connection) -> Result<Option<Si
             };
 
             let last_lyrics = SimpleLyrics {
+                lyrics_id: row.get("last_lyrics_id")?,
                 plain_lyrics: row.get("plain_lyrics")?,
                 synced_lyrics: row.get("synced_lyrics")?,
                 lyricsfile: row.get("lyricsfile")?,
@@ -204,6 +205,7 @@ pub fn get_track_by_metadata(
                 let instrumental = row.get::<_, Option<bool>>("instrumental")?.unwrap_or(false);
 
                 let last_lyrics = SimpleLyrics {
+                    lyrics_id: row.get("last_lyrics_id")?,
                     plain_lyrics: row.get("plain_lyrics")?,
                     synced_lyrics: row.get("synced_lyrics")?,
                     lyricsfile: row.get("lyricsfile")?,
@@ -262,6 +264,7 @@ pub fn get_tracks_by_keyword(
       tracks.artist_name,
       tracks.album_name,
       tracks.duration,
+      tracks.last_lyrics_id,
       lyrics.instrumental,
       lyrics.plain_lyrics,
       lyrics.synced_lyrics,
@@ -306,6 +309,7 @@ pub fn get_tracks_by_keyword(
         };
 
         let last_lyrics = SimpleLyrics {
+            lyrics_id: row.get("last_lyrics_id")?,
             plain_lyrics: row.get("plain_lyrics")?,
             synced_lyrics: row.get("synced_lyrics")?,
             lyricsfile: row.get("lyricsfile")?,
