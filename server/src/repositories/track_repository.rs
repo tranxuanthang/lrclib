@@ -331,6 +331,40 @@ pub fn get_tracks_by_keyword(
     Ok(tracks)
 }
 
+
+pub fn get_lyrics_by_id(lyrics_id: i64, conn: &mut Connection) -> Result<Option<SimpleLyrics>> {
+    let query = indoc! {"
+    SELECT
+      lyrics.id,
+      lyrics.instrumental,
+      lyrics.plain_lyrics,
+      lyrics.synced_lyrics,
+      lyrics.lyricsfile
+    FROM
+      lyrics
+    WHERE
+      lyrics.id = ?
+  "};
+    let mut statement = conn.prepare_cached(query)?;
+    let row = statement
+        .query_row([lyrics_id], |row| {
+            let instrumental = match row.get("instrumental")? {
+                Some(value) => value,
+                None => false,
+            };
+
+            Ok(SimpleLyrics {
+                lyrics_id: row.get("id")?,
+                plain_lyrics: row.get("plain_lyrics")?,
+                synced_lyrics: row.get("synced_lyrics")?,
+                lyricsfile: row.get("lyricsfile")?,
+                instrumental,
+            })
+        })
+        .optional()?;
+    Ok(row)
+}
+
 pub fn add_one(
     track_name: &str,
     artist_name: &str,

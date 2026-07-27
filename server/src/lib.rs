@@ -17,7 +17,7 @@ use repositories::lyrics_repository::get_last_10_mins_lyrics_count;
 use track_response::TrackResponse;
 use routes::search_lyrics::CachedResult;
 use routes::{
-    flag_lyrics, get_lyrics_by_metadata, get_lyrics_by_track_id, manage, publish_lyrics,
+    flag_lyrics, get_lyrics_by_metadata, get_lyrics_by_track_id, get_lyrics_by_lyrics_id, manage, publish_lyrics,
     request_challenge, search_lyrics,
 };
 use std::collections::HashSet;
@@ -114,6 +114,7 @@ fn build_router(state: Arc<AppState>, state_for_logging: Arc<AppState>) -> Route
     let api_routes = Router::new()
         .route("/get", get(get_lyrics_by_metadata::route))
         .route("/get/:track_id", get(get_lyrics_by_track_id::route))
+        .route("/lyrics/:lyrics_id", get(get_lyrics_by_lyrics_id::route))
         .route("/search", get(search_lyrics::route))
         .route("/request-challenge", post(request_challenge::route))
         .route("/publish", post(publish_lyrics::route))
