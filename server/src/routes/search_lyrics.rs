@@ -1,6 +1,7 @@
 use crate::{
     entities::track::SimpleTrack, errors::ApiError,
     repositories::track_repository::get_tracks_by_keyword, utils::process_param, AppState,
+    track_response::{TrackResponse, create_track_response},
 };
 use axum::{
     extract::{Query, State},
@@ -17,21 +18,6 @@ pub struct QueryParams {
     track_name: Option<String>,
     artist_name: Option<String>,
     album_name: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct TrackResponse {
-    id: i64,
-    name: Option<String>,
-    track_name: Option<String>,
-    artist_name: Option<String>,
-    album_name: Option<String>,
-    duration: Option<f64>,
-    instrumental: bool,
-    plain_lyrics: Option<String>,
-    synced_lyrics: Option<String>,
-    lyricsfile: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -105,41 +91,8 @@ pub async fn route(
 
 fn create_response(tracks: Vec<SimpleTrack>) -> Vec<TrackResponse> {
     tracks
-        .iter()
-        .map(|track| {
-            let plain_lyrics = match track.last_lyrics {
-                Some(ref lyrics) => lyrics.plain_lyrics.to_owned(),
-                None => None,
-            };
-
-            let synced_lyrics = match track.last_lyrics {
-                Some(ref lyrics) => lyrics.synced_lyrics.to_owned(),
-                None => None,
-            };
-
-            let instrumental = match track.last_lyrics {
-                Some(ref lyrics) => lyrics.instrumental.to_owned(),
-                None => false,
-            };
-
-            let lyricsfile = match track.last_lyrics {
-                Some(ref lyrics) => lyrics.lyricsfile.to_owned(),
-                None => None,
-            };
-
-            TrackResponse {
-                id: track.id,
-                name: track.name.to_owned(),
-                track_name: track.name.to_owned(),
-                artist_name: track.artist_name.to_owned(),
-                album_name: track.album_name.to_owned(),
-                duration: track.duration,
-                instrumental,
-                plain_lyrics,
-                synced_lyrics,
-                lyricsfile,
-            }
-        })
+        .into_iter()
+        .map(|track| create_track_response(track))
         .collect()
 }
 
