@@ -1,4 +1,7 @@
-use crate::AppState;
+use crate::{
+    AppState,
+    track_response::{TrackResponse},
+};
 use aho_corasick::AhoCorasick;
 use collapse::collapse;
 use moka::future::Cache;
@@ -117,7 +120,7 @@ pub async fn get_cached_metadata_response(
     artist_name_lower: &str,
     album_name_lower: Option<&str>,
     duration: f64,
-) -> Option<crate::routes::get_lyrics_by_metadata::TrackResponse> {
+) -> Option<TrackResponse> {
     let bucket = duration_bucket(duration);
 
     // Try cache keys for duration -2, -1, 0, +1, +2

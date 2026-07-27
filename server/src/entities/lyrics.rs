@@ -16,6 +16,7 @@ pub struct Lyrics {
 }
 
 pub struct SimpleLyrics {
+    pub lyrics_id: i64,
     pub plain_lyrics: Option<String>,
     pub synced_lyrics: Option<String>,
     pub lyricsfile: Option<String>,

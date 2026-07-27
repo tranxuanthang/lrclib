@@ -14,10 +14,10 @@ use r2d2::Pool;
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use repositories::lyrics_repository::get_last_10_mins_lyrics_count;
-use routes::get_lyrics_by_metadata::TrackResponse as GetLyricsByMetadataResponse;
+use track_response::TrackResponse;
 use routes::search_lyrics::CachedResult;
 use routes::{
-    flag_lyrics, get_lyrics_by_metadata, get_lyrics_by_track_id, manage, publish_lyrics,
+    flag_lyrics, get_lyrics_by_metadata, get_lyrics_by_track_id, get_lyrics_by_lyrics_id, manage, publish_lyrics,
     request_challenge, search_lyrics,
 };
 use std::collections::HashSet;
@@ -42,12 +42,13 @@ pub mod queue;
 pub mod repositories;
 pub mod routes;
 pub mod utils;
+pub mod track_response;
 
 pub struct AppState {
     pool: Pool<SqliteConnectionManager>,
     challenge_cache: Cache<String, String>,
     get_cache: Cache<String, String>,
-    get_metadata_cache: Cache<String, GetLyricsByMetadataResponse>,
+    get_metadata_cache: Cache<String, TrackResponse>,
     get_metadata_index: DashMap<i64, HashSet<String>>,
     search_cache: Cache<String, CachedResult>,
     queue: ArrayQueue<MissingTrack>,
@@ -113,6 +114,7 @@ fn build_router(state: Arc<AppState>, state_for_logging: Arc<AppState>) -> Route
     let api_routes = Router::new()
         .route("/get", get(get_lyrics_by_metadata::route))
         .route("/get/:track_id", get(get_lyrics_by_track_id::route))
+        .route("/lyrics/:lyrics_id", get(get_lyrics_by_lyrics_id::route))
         .route("/search", get(search_lyrics::route))
         .route("/request-challenge", post(request_challenge::route))
         .route("/publish", post(publish_lyrics::route))
@@ -222,7 +224,7 @@ fn build_app_state(pool: Pool<SqliteConnectionManager>) -> Arc<AppState> {
             .time_to_live(Duration::from_secs(60 * 60 * 24 * 7))
             .max_capacity(10000000)
             .build(),
-        get_metadata_cache: Cache::<String, GetLyricsByMetadataResponse>::builder()
+        get_metadata_cache: Cache::<String, TrackResponse>::builder()
             .max_capacity(5000000)
             .build(),
         get_metadata_index: DashMap::new(),

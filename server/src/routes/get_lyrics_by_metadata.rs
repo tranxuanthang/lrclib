@@ -6,6 +6,7 @@ use crate::{
         add_get_metadata_cache_index, build_get_metadata_cache_key, get_cached_metadata_response,
         process_param,
     },
+    track_response::{TrackResponse, create_track_response},
     AppState,
 };
 use anyhow::Result;
@@ -15,7 +16,7 @@ use axum::{
 };
 use axum_macros::debug_handler;
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize};
 use std::sync::Arc;
 use validator::Validate;
 
@@ -30,20 +31,6 @@ pub struct QueryParams {
     duration: Option<f64>,
 }
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct TrackResponse {
-    id: i64,
-    name: Option<String>,
-    track_name: Option<String>,
-    artist_name: Option<String>,
-    album_name: Option<String>,
-    duration: Option<f64>,
-    instrumental: bool,
-    plain_lyrics: Option<String>,
-    synced_lyrics: Option<String>,
-    lyricsfile: Option<String>,
-}
 
 #[debug_handler]
 pub async fn route(
@@ -88,7 +75,7 @@ pub async fn route(
         )
         .await?
         {
-            let response = create_response(track);
+            let response = create_track_response(track);
 
             // Cache using canonical duration (the track's actual rounded duration)
             let canonical_bucket = response.duration.map(|d| d.round() as i64);
@@ -193,40 +180,6 @@ async fn handle_missing_track(
     Ok(())
 }
 
-fn create_response(track: SimpleTrack) -> TrackResponse {
-    let plain_lyrics = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.plain_lyrics.to_owned(),
-        None => None,
-    };
-
-    let synced_lyrics = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.synced_lyrics.to_owned(),
-        None => None,
-    };
-
-    let instrumental = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.instrumental.to_owned(),
-        None => false,
-    };
-
-    let lyricsfile = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.lyricsfile.to_owned(),
-        None => None,
-    };
-
-    TrackResponse {
-        id: track.id,
-        name: track.name.to_owned(),
-        track_name: track.name.to_owned(),
-        artist_name: track.artist_name.to_owned(),
-        album_name: track.album_name.to_owned(),
-        duration: track.duration,
-        instrumental,
-        plain_lyrics,
-        synced_lyrics,
-        lyricsfile,
-    }
-}
 
 fn send_to_queue(missing_track: MissingTrack, state: &Arc<AppState>) {
     match state.enqueue_missing_track(missing_track.clone()) {
