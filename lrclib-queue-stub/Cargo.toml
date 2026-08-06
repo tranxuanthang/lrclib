@@ -1,9 +1,0 @@
-[package]
-name = "lrclib-queue"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-server = { path = "../server" }
-tokio = { version = "1.37.0", features = ["sync"] }
-tracing = "0.1"

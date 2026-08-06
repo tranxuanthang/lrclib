@@ -1,11 +1,10 @@
 use crate::{
-    entities::{missing_track::MissingTrack, track::SimpleTrack},
+    entities::track::SimpleTrack,
     errors::ApiError,
+    errors::OverloadedError,
+    metrics::MonitoredRoute,
     repositories::track_repository::get_track_by_metadata,
-    utils::{
-        add_get_metadata_cache_index, build_get_metadata_cache_key, get_cached_metadata_response,
-        process_param,
-    },
+    utils::process_param,
     AppState,
 };
 use anyhow::Result;
@@ -14,9 +13,8 @@ use axum::{
     Json,
 };
 use axum_macros::debug_handler;
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 use validator::Validate;
 
 #[derive(Clone, Validate, Deserialize)]
@@ -61,136 +59,124 @@ pub async fn route(
 
     if let (Some(track_name_lower), Some(artist_name_lower)) = (track_name_lower, artist_name_lower)
     {
-        // Try cache lookup with multiple duration keys (±2 seconds)
-        if let Some(duration) = params.duration {
-            if let Some(cached) = get_cached_metadata_response(
-                &state,
-                &track_name_lower,
-                &artist_name_lower,
-                album_name_lower.as_deref(),
-                duration,
-            )
-            .await
-            {
-                return Ok(Json(cached));
-            }
-        }
-
-        let mut conn = state.pool.get()?;
-
-        // Attempt to fetch the track with all provided metadata
-        if let Some(track) = fetch_track(
+        let cache_key = build_cache_key(
             &track_name_lower,
             &artist_name_lower,
             album_name_lower.as_deref(),
             params.duration,
-            &mut conn,
-        )
-        .await?
-        {
-            let response = create_response(track);
+        );
 
-            // Cache using canonical duration (the track's actual rounded duration)
-            let canonical_bucket = response.duration.map(|d| d.round() as i64);
-            let cache_key = build_get_metadata_cache_key(
-                &track_name_lower,
-                &artist_name_lower,
-                album_name_lower.as_deref(),
-                canonical_bucket,
-            );
-            state
-                .get_metadata_cache
-                .insert(cache_key.clone(), response.clone())
-                .await;
-
-            add_get_metadata_cache_index(&state, response.id, &cache_key);
-
-            return Ok(Json(response));
+        match state.get_metadata_cache.get(&cache_key).await {
+            Some(cached) => {
+                state
+                    .http_metrics
+                    .record_cache_hit(MonitoredRoute::GetMetadata);
+                return cached
+                    .map(|response| Json(response))
+                    .ok_or(ApiError::TrackNotFoundError);
+            }
+            None => {
+                state
+                    .http_metrics
+                    .record_cache_miss(MonitoredRoute::GetMetadata);
+            }
         }
 
-        // If not found, handle missing track logic
-        if let Err(e) = handle_missing_track(
-            &params,
-            &track_name_lower,
-            &artist_name_lower,
-            album_name_lower.as_deref(),
-            &state,
-        )
-        .await
-        {
-            tracing::error!(
-                message = "failed to handle missing track",
-                error = e.to_string()
-            );
-        }
+        let loader_state = Arc::clone(&state);
+        let response = state
+            .get_metadata_cache
+            .try_get_with(cache_key, async move {
+                load_metadata_response(
+                    loader_state,
+                    params,
+                    track_name_lower,
+                    artist_name_lower,
+                    album_name_lower,
+                )
+                .await
+            })
+            .await
+            .map_err(|error| {
+                if error.downcast_ref::<OverloadedError>().is_some() {
+                    state.http_metrics.record_overload(MonitoredRoute::GetMetadata);
+                    ApiError::OverloadedError
+                } else {
+                    ApiError::UnknownError(anyhow::anyhow!(error.to_string()))
+                }
+            })?;
 
-        // Retry fetching the track without the album name
-        // if album_name_lower.is_some() {
-        //   if let Some(track) = fetch_track_without_album(&track_name_lower, &artist_name_lower, params.duration, &mut conn).await? {
-        //     return Ok(Json(create_response(track)));
-        //   }
-        // }
+        return response
+            .map(|response| Json(response))
+            .ok_or(ApiError::TrackNotFoundError);
     }
 
     Err(ApiError::TrackNotFoundError)
 }
 
-async fn fetch_track(
+fn build_cache_key(
     track_name_lower: &str,
     artist_name_lower: &str,
     album_name_lower: Option<&str>,
     duration: Option<f64>,
-    conn: &mut Connection,
-) -> Result<Option<SimpleTrack>> {
-    get_track_by_metadata(
-        track_name_lower,
-        artist_name_lower,
-        album_name_lower,
-        duration,
-        conn,
-    )
+) -> String {
+    let album = album_name_lower.unwrap_or("");
+    let bucket = duration.map(|d| d.round() as i64).unwrap_or(0);
+    format!("get:v4:{track_name_lower}:{artist_name_lower}:{album}:{bucket}")
 }
 
-// async fn fetch_track_without_album(track_name_lower: &str, artist_name_lower: &str, duration: Option<f64>, conn: &mut Connection) -> Result<Option<SimpleTrack>> {
-//   get_track_by_metadata(
-//     track_name_lower,
-//     artist_name_lower,
-//     None,
-//     duration,
-//     conn,
-//   )
-// }
+async fn load_metadata_response(
+    state: Arc<AppState>,
+    params: QueryParams,
+    track_name_lower: String,
+    artist_name_lower: String,
+    album_name_lower: Option<String>,
+) -> Result<Option<TrackResponse>> {
+    let duration = params.duration;
+    let state_clone = Arc::clone(&state);
+    let track_name = track_name_lower.clone();
+    let artist_name = artist_name_lower.clone();
+    let album_name = album_name_lower.clone();
 
-async fn handle_missing_track(
-    params: &QueryParams,
-    track_name_lower: &str,
-    artist_name_lower: &str,
-    album_name_lower: Option<&str>,
-    state: &Arc<AppState>,
-) -> Result<()> {
-    if let (Some(album_name), Some(album_name_lower), Some(duration)) = (
-        params.album_name.as_deref(),
-        album_name_lower,
-        params.duration,
-    ) {
-        let missing_track = MissingTrack {
-            name: params.track_name.trim().to_owned(),
-            artist_name: params.artist_name.trim().to_owned(),
-            album_name: album_name.trim().to_owned(),
+    let blocking_started_at = Instant::now();
+    let permit = state.acquire_load_permit().await?;
+    let track = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state_clone
+            .http_metrics
+            .record_blocking_wait_latency(
+                MonitoredRoute::GetMetadata,
+                blocking_started_at.elapsed(),
+            );
+
+        let db_pool_started_at = Instant::now();
+        let mut conn = state_clone.pool.get()?;
+        state_clone
+            .http_metrics
+            .record_db_pool_wait_latency(
+                MonitoredRoute::GetMetadata,
+                db_pool_started_at.elapsed(),
+            );
+
+        let sql_started_at = Instant::now();
+        let track = get_track_by_metadata(
+            &track_name,
+            &artist_name,
+            album_name.as_deref(),
             duration,
-        };
-
-        let cache_key = format!(
-            "missing_track:{}:{}:{}:{}",
-            track_name_lower, artist_name_lower, album_name_lower, duration
+            &mut conn,
         );
-        if !state.get_cache.contains_key(&cache_key) {
-            state.get_cache.insert(cache_key, "1".to_owned()).await;
-            send_to_queue(missing_track, state);
-        }
+        state_clone
+            .http_metrics
+            .record_sql_latency(MonitoredRoute::GetMetadata, sql_started_at.elapsed());
+        track
+    })
+    .await??;
+
+    if let Some(track) = track {
+        return Ok(Some(create_response(track)));
     }
 
-    Ok(())
+    Ok(None)
 }
 
 fn create_response(track: SimpleTrack) -> TrackResponse {
@@ -228,21 +214,216 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
     }
 }
 
-fn send_to_queue(missing_track: MissingTrack, state: &Arc<AppState>) {
-    match state.enqueue_missing_track(missing_track.clone()) {
-        Ok(_) => tracing::debug!(
-            message = "sent missing track to queue",
-            track_name = missing_track.name,
-            artist_name = missing_track.artist_name,
-            album_name = missing_track.album_name,
-            duration = missing_track.duration,
-        ),
-        Err(missing_track) => tracing::debug!(
-            message = "failed to push to queue",
-            track_name = missing_track.name,
-            artist_name = missing_track.artist_name,
-            album_name = missing_track.album_name,
-            duration = missing_track.duration,
-        ),
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::init_db;
+    use crate::repositories::track_repository;
+    use std::path::PathBuf;
+    use tokio::sync::Barrier;
+    use uuid::Uuid;
+
+    fn test_state() -> (Arc<AppState>, PathBuf) {
+        let path = std::env::temp_dir().join(format!("lrclib-test-{}.sqlite3", Uuid::new_v4()));
+        let pool = init_db(&path).expect("failed to initialize test database");
+        (crate::state::build_app_state(pool, None), path)
+    }
+
+    fn remove_test_database(path: &PathBuf) {
+        for path in [
+            path.clone(),
+            PathBuf::from(format!("{}-wal", path.display())),
+            PathBuf::from(format!("{}-shm", path.display())),
+        ] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_metadata_misses_share_one_load() {
+        const REQUESTS: usize = 16;
+
+        let (state, path) = test_state();
+        let expected_track_id = {
+            let mut conn = state.pool.get().unwrap();
+            track_repository::add_one(
+                "Single Flight Metadata",
+                "Test Artist",
+                "Test Album",
+                180.0,
+                &mut conn,
+            )
+            .unwrap()
+        };
+        let barrier = Arc::new(Barrier::new(REQUESTS + 1));
+        let mut tasks = Vec::with_capacity(REQUESTS);
+
+        for _ in 0..REQUESTS {
+            let state = Arc::clone(&state);
+            let barrier = Arc::clone(&barrier);
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                route(
+                    Query(QueryParams {
+                        track_name: "Single Flight Metadata".to_owned(),
+                        artist_name: "Test Artist".to_owned(),
+                        album_name: Some("Test Album".to_owned()),
+                        duration: Some(180.0),
+                    }),
+                    State(state),
+                )
+                .await
+            }));
+        }
+
+        barrier.wait().await;
+        for task in tasks {
+            let response = task
+                .await
+                .expect("metadata task failed")
+                .unwrap_or_else(|_| panic!("metadata lookup failed"));
+            assert_eq!(response.0.id, expected_track_id);
+        }
+
+        drop(state);
+        remove_test_database(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_missing_metadata_requests_share_one_load() {
+        const REQUESTS: usize = 16;
+
+        let (state, path) = test_state();
+        let barrier = Arc::new(Barrier::new(REQUESTS + 1));
+        let mut tasks = Vec::with_capacity(REQUESTS);
+
+        for _ in 0..REQUESTS {
+            let state = Arc::clone(&state);
+            let barrier = Arc::clone(&barrier);
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                route(
+                    Query(QueryParams {
+                        track_name: "Missing Metadata".to_owned(),
+                        artist_name: "Missing Artist".to_owned(),
+                        album_name: Some("Missing Album".to_owned()),
+                        duration: Some(180.0),
+                    }),
+                    State(state),
+                )
+                .await
+            }));
+        }
+
+        barrier.wait().await;
+        for task in tasks {
+            let result = task.await.expect("missing metadata task failed");
+            assert!(matches!(result, Err(ApiError::TrackNotFoundError)));
+        }
+
+        drop(state);
+        remove_test_database(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cached_miss_avoids_db_on_retry() {
+        let (state, path) = test_state();
+
+        let params = QueryParams {
+            track_name: "Nonexistent Track".to_owned(),
+            artist_name: "Nonexistent Artist".to_owned(),
+            album_name: Some("Nonexistent Album".to_owned()),
+            duration: Some(180.0),
+        };
+
+        let result = route(Query(params.clone()), State(Arc::clone(&state))).await;
+        assert!(matches!(result, Err(ApiError::TrackNotFoundError)));
+
+        let result = route(Query(params), State(Arc::clone(&state))).await;
+        assert!(matches!(result, Err(ApiError::TrackNotFoundError)));
+
+        drop(state);
+        remove_test_database(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cached_hit_returns_track_on_retry() {
+        let (state, path) = test_state();
+
+        let track_id = {
+            let mut conn = state.pool.get().unwrap();
+            track_repository::add_one(
+                "Cached Track",
+                "Cached Artist",
+                "Cached Album",
+                240.0,
+                &mut conn,
+            )
+            .unwrap()
+        };
+
+        let params = QueryParams {
+            track_name: "Cached Track".to_owned(),
+            artist_name: "Cached Artist".to_owned(),
+            album_name: Some("Cached Album".to_owned()),
+            duration: Some(240.0),
+        };
+
+        let response = route(Query(params.clone()), State(Arc::clone(&state)))
+            .await
+            .unwrap_or_else(|_| panic!("first lookup failed"));
+        assert_eq!(response.0.id, track_id);
+
+        let response = route(Query(params), State(Arc::clone(&state)))
+            .await
+            .unwrap_or_else(|_| panic!("second lookup failed"));
+        assert_eq!(response.0.id, track_id);
+
+        drop(state);
+        remove_test_database(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn permits_exhausted_returns_503_with_retry_after() {
+        use axum::response::IntoResponse;
+
+        let (state, path) = test_state();
+
+        let held: Vec<_> = std::iter::repeat_with(|| {
+            state.load_permits.clone().try_acquire_owned().ok()
+        })
+        .take_while(Option::is_some)
+        .flatten()
+        .collect();
+        assert!(!held.is_empty(), "must have held at least one permit");
+
+        let error = match route(
+            Query(QueryParams {
+                track_name: "Overloaded Get".to_owned(),
+                artist_name: "Artist".to_owned(),
+                album_name: Some("Album".to_owned()),
+                duration: Some(180.0),
+            }),
+            State(Arc::clone(&state)),
+        )
+        .await
+        {
+            Ok(_) => panic!("get should be rejected when permits are exhausted"),
+            Err(e) => e,
+        };
+
+        let response = error.into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("retry-after")
+                .map(|v: &axum::http::HeaderValue| v.to_str().unwrap()),
+            Some("1")
+        );
+
+        drop(held);
+        drop(state);
+        remove_test_database(&path);
     }
 }

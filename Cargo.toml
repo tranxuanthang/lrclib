@@ -4,14 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1"
 server = { path = "./server" }
-lrclib-queue = { path = "./lrclib-queue-stub", optional = true }
 clap = { version = "4.5.4", features = ["derive", "env"] }
 tokio = { version = "1.37.0", features = ["full"] }
 
-[features]
-default = []
-queue = ["dep:lrclib-queue"]
-
 [workspace]
-members = ["server", "lrclib-queue-stub"]
+members = ["server"]

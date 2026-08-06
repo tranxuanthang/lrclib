@@ -1,9 +1,10 @@
 use axum::{
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use serde::Serialize;
+use std::fmt;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,12 +14,23 @@ pub struct ApiErrorResponse {
     status_code: u16,
 }
 
+#[derive(Debug)]
+pub struct OverloadedError;
+
+impl fmt::Display for OverloadedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the server is busy")
+    }
+}
+
+impl std::error::Error for OverloadedError {}
+
 pub enum ApiError {
     TrackNotFoundError,
     IncorrectPublishTokenError,
     ValidationError(String),
     UnknownError(anyhow::Error),
-    InvalidManageTokenError,
+    OverloadedError,
 }
 
 impl IntoResponse for ApiError {
@@ -51,17 +63,8 @@ impl IntoResponse for ApiError {
                 }),
             )
                 .into_response(),
-            ApiError::InvalidManageTokenError => (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiErrorResponse {
-                    message: "Invalid manage token".to_owned(),
-                    name: "InvalidManageTokenError".to_owned(),
-                    status_code: StatusCode::UNAUTHORIZED.as_u16(),
-                }),
-            )
-                .into_response(),
-            ApiError::UnknownError(err) => {
-                tracing::error!(message = "unknown error happened", error = err.to_string());
+            ApiError::UnknownError(_err) => {
+                // tracing::error!(message = "unknown error happened", error = err.to_string());
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiErrorResponse {
@@ -71,6 +74,21 @@ impl IntoResponse for ApiError {
                     }),
                 )
                     .into_response()
+            }
+            ApiError::OverloadedError => {
+                let mut response = (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(ApiErrorResponse {
+                        message: "The server is busy, please retry in a moment".to_owned(),
+                        name: "ServerOverloaded".to_owned(),
+                        status_code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    }),
+                )
+                    .into_response();
+                response
+                    .headers_mut()
+                    .insert(header::RETRY_AFTER, "1".parse().unwrap());
+                response
             }
         }
     }

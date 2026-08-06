@@ -21,3 +21,11 @@ pub struct SimpleTrack {
     pub duration: Option<f64>,
     pub last_lyrics: Option<SimpleLyrics>,
 }
+
+/// Projection of a track used to build the full-text search index.
+pub struct TrackSearchDoc {
+    pub id: i64,
+    pub name_lower: Option<String>,
+    pub artist_name_lower: Option<String>,
+    pub album_name_lower: Option<String>,
+}

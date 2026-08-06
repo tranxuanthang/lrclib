@@ -1,5 +1,8 @@
 use crate::{
-    entities::{lyrics::SimpleLyrics, track::SimpleTrack},
+    entities::{
+        lyrics::SimpleLyrics,
+        track::{SimpleTrack, TrackSearchDoc},
+    },
     utils::prepare_input,
 };
 use anyhow::Result;
@@ -7,6 +10,28 @@ use chrono::prelude::*;
 use indoc::indoc;
 use rusqlite::params_from_iter;
 use rusqlite::{Connection, OptionalExtension, Transaction};
+use std::collections::HashMap;
+
+/// Maps a row containing track columns joined with the current lyrics row.
+fn simple_track_from_row(row: &rusqlite::Row) -> rusqlite::Result<SimpleTrack> {
+    let instrumental = row.get::<_, Option<bool>>("instrumental")?.unwrap_or(false);
+
+    let last_lyrics = SimpleLyrics {
+        plain_lyrics: row.get("plain_lyrics")?,
+        synced_lyrics: row.get("synced_lyrics")?,
+        lyricsfile: row.get("lyricsfile")?,
+        instrumental,
+    };
+
+    Ok(SimpleTrack {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        artist_name: row.get("artist_name")?,
+        album_name: row.get("album_name")?,
+        duration: row.get("duration")?,
+        last_lyrics: Some(last_lyrics),
+    })
+}
 
 pub fn get_track_by_id(track_id: i64, conn: &mut Connection) -> Result<Option<SimpleTrack>> {
     let query = indoc! {"
@@ -29,28 +54,7 @@ pub fn get_track_by_id(track_id: i64, conn: &mut Connection) -> Result<Option<Si
   "};
     let mut statement = conn.prepare_cached(query)?;
     let row = statement
-        .query_row([track_id], |row| {
-            let instrumental = match row.get("instrumental")? {
-                Some(value) => value,
-                None => false,
-            };
-
-            let last_lyrics = SimpleLyrics {
-                plain_lyrics: row.get("plain_lyrics")?,
-                synced_lyrics: row.get("synced_lyrics")?,
-                lyricsfile: row.get("lyricsfile")?,
-                instrumental,
-            };
-
-            Ok(SimpleTrack {
-                id: row.get("id")?,
-                name: row.get("name")?,
-                artist_name: row.get("artist_name")?,
-                album_name: row.get("album_name")?,
-                duration: row.get("duration")?,
-                last_lyrics: Some(last_lyrics),
-            })
-        })
+        .query_row([track_id], simple_track_from_row)
         .optional()?;
     Ok(row)
 }
@@ -186,7 +190,7 @@ pub fn get_track_by_metadata(
 
     // Combine all parts of the query
     // Prefer tracks with synced lyrics
-    let order_by = "(lyrics.synced_lyrics IS NOT NULL) DESC, tracks.id";
+    let order_by = "tracks.id";
 
     let query = format!(
         "{select} WHERE {where_clause} ORDER BY {order_by} LIMIT 1",
@@ -200,61 +204,25 @@ pub fn get_track_by_metadata(
     let row = statement
         .query_row(
             params_from_iter(params.iter().map(|v| v as &dyn rusqlite::ToSql)),
-            |row| {
-                let instrumental = row.get::<_, Option<bool>>("instrumental")?.unwrap_or(false);
-
-                let last_lyrics = SimpleLyrics {
-                    plain_lyrics: row.get("plain_lyrics")?,
-                    synced_lyrics: row.get("synced_lyrics")?,
-                    lyricsfile: row.get("lyricsfile")?,
-                    instrumental,
-                };
-
-                Ok(SimpleTrack {
-                    id: row.get("id")?,
-                    name: row.get("name")?,
-                    artist_name: row.get("artist_name")?,
-                    album_name: row.get("album_name")?,
-                    duration: row.get("duration")?,
-                    last_lyrics: Some(last_lyrics),
-                })
-            },
+            simple_track_from_row,
         )
         .optional()?;
 
     Ok(row)
 }
 
-pub fn get_tracks_by_keyword(
-    q: Option<&str>,
-    track_name: Option<&str>,
-    artist_name: Option<&str>,
-    album_name: Option<&str>,
-    conn: &mut Connection,
-) -> Result<Vec<SimpleTrack>> {
-    // To search track by keyword, at least q or track_name must be present
-    if q.is_none() && track_name.is_none() {
-        return Ok(vec![]);
+/// Fetches tracks (joined with their current lyrics) by id, returning them in
+/// the same order as `track_ids`.
+///
+/// This backs the Tantivy search path, where the id order carries the ranking.
+/// Callers pass at most `search_index::SEARCH_RESULT_LIMIT` ids, so the
+/// per-length statement cache stays small.
+pub fn get_tracks_by_ids(track_ids: &[i64], conn: &mut Connection) -> Result<Vec<SimpleTrack>> {
+    if track_ids.is_empty() {
+        return Ok(Vec::new());
     }
 
-    // Determine whether to include ORDER BY rank based on the number of words in q or track_name
-    let is_ordered = if let Some(query) = q {
-        query.split_whitespace().count() > 3
-    } else if let (Some(track_name), None, None) = (track_name, artist_name, album_name) {
-        track_name.split_whitespace().count() > 3
-    } else {
-        true
-    };
-
-    // Build the subquery with or without ORDER BY rank
-    let subquery = if is_ordered {
-        indoc! {"SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ? ORDER BY rank LIMIT 20"}
-            .to_string()
-    } else {
-        indoc! {"SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ? LIMIT 20"}.to_string()
-    };
-
-    // Build the complete query using the subquery
+    let placeholders = vec!["?"; track_ids.len()].join(", ");
     let query = format!(
         "SELECT
       tracks.id,
@@ -267,64 +235,61 @@ pub fn get_tracks_by_keyword(
       lyrics.synced_lyrics,
       lyrics.lyricsfile
     FROM
-      ({subquery}) AS search_results
-      LEFT JOIN tracks ON search_results.rowid = tracks.id
+      tracks
       LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
-    ",
-        subquery = subquery
+    WHERE
+      tracks.id IN ({placeholders})"
     );
 
     let mut statement = conn.prepare_cached(&query)?;
-    let fts_query = match q {
-        Some(q) => prepare_input(&q),
-        None => match track_name {
-            Some(track_name) => {
-                let mut result = format!("(name_lower : \"{}\")", track_name).to_owned();
-                if let Some(artist_name) = artist_name {
-                    result.push_str(format!("AND (artist_name_lower : {})", artist_name).as_ref());
-                }
-                if let Some(album_name) = album_name {
-                    result
-                        .push_str(format!("AND (album_name_lower : \"{}\")", album_name).as_ref());
-                }
-                result
-            }
-            None => "".to_owned(),
-        },
-    };
+    let rows = statement.query_map(params_from_iter(track_ids.iter()), simple_track_from_row)?;
+    let mut tracks = rows.collect::<rusqlite::Result<Vec<_>>>()?;
 
-    tracing::debug!("FTS query: {}", fts_query);
-
-    let mut rows = statement.query([fts_query])?;
-
-    let mut tracks = Vec::new();
-
-    while let Some(row) = rows.next()? {
-        let instrumental = match row.get("instrumental")? {
-            Some(value) => value,
-            None => false,
-        };
-
-        let last_lyrics = SimpleLyrics {
-            plain_lyrics: row.get("plain_lyrics")?,
-            synced_lyrics: row.get("synced_lyrics")?,
-            lyricsfile: row.get("lyricsfile")?,
-            instrumental,
-        };
-
-        let track = SimpleTrack {
-            id: row.get("id")?,
-            name: row.get("name")?,
-            artist_name: row.get("artist_name")?,
-            album_name: row.get("album_name")?,
-            duration: row.get("duration")?,
-            last_lyrics: Some(last_lyrics),
-        };
-
-        tracks.push(track);
-    }
+    let rank_by_id: HashMap<i64, usize> = track_ids
+        .iter()
+        .enumerate()
+        .map(|(rank, track_id)| (*track_id, rank))
+        .collect();
+    tracks.sort_by_key(|track| rank_by_id.get(&track.id).copied().unwrap_or(usize::MAX));
 
     Ok(tracks)
+}
+
+/// Returns tracks with `id > after_id` in ascending id order, limited to `limit` rows.
+///
+/// This is the tailing query used by the search indexer. It relies on
+/// `tracks.id` being monotonically increasing (AUTOINCREMENT) and the indexed
+/// name columns being immutable after insert.
+pub fn get_track_search_docs_after(
+    after_id: i64,
+    limit: usize,
+    conn: &mut Connection,
+) -> Result<Vec<TrackSearchDoc>> {
+    let query = indoc! {"
+    SELECT
+      id,
+      name_lower,
+      artist_name_lower,
+      album_name_lower
+    FROM
+      tracks
+    WHERE
+      id > ?
+    ORDER BY
+      id
+    LIMIT ?
+  "};
+    let mut statement = conn.prepare_cached(query)?;
+    let rows = statement.query_map((after_id, limit as i64), |row| {
+        Ok(TrackSearchDoc {
+            id: row.get("id")?,
+            name_lower: row.get("name_lower")?,
+            artist_name_lower: row.get("artist_name_lower")?,
+            album_name_lower: row.get("album_name_lower")?,
+        })
+    })?;
+
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 pub fn add_one(
@@ -419,4 +384,69 @@ pub fn flag_track_last_lyrics(track_id: i64, content: &str, conn: &mut Connectio
     let mut statement = conn.prepare_cached(query)?;
     statement.execute((content, now, track_id))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::init_db;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn test_pool() -> (r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>, PathBuf) {
+        let path =
+            std::env::temp_dir().join(format!("lrclib-repo-test-{}.sqlite3", Uuid::new_v4()));
+        let pool = init_db(&path).expect("failed to initialize test database");
+        (pool, path)
+    }
+
+    fn remove_test_database(path: &std::path::Path) {
+        for path in [
+            path.to_path_buf(),
+            PathBuf::from(format!("{}-wal", path.display())),
+            PathBuf::from(format!("{}-shm", path.display())),
+        ] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn get_tracks_by_ids_preserves_requested_order() {
+        let (pool, path) = test_pool();
+        let mut conn = pool.get().unwrap();
+        let first = add_one("First Song", "Artist", "Album", 180.0, &mut conn).unwrap();
+        let second = add_one("Second Song", "Artist", "Album", 200.0, &mut conn).unwrap();
+        let third = add_one("Third Song", "Artist", "Album", 210.0, &mut conn).unwrap();
+
+        let tracks = get_tracks_by_ids(&[third, first, second], &mut conn).unwrap();
+
+        assert_eq!(
+            tracks.iter().map(|track| track.id).collect::<Vec<_>>(),
+            vec![third, first, second]
+        );
+        assert_eq!(tracks[0].name.as_deref(), Some("Third Song"));
+
+        drop(conn);
+        drop(pool);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn get_tracks_by_ids_skips_missing_ids_and_handles_empty_input() {
+        let (pool, path) = test_pool();
+        let mut conn = pool.get().unwrap();
+        let track_id = add_one("Only Song", "Artist", "Album", 180.0, &mut conn).unwrap();
+
+        let tracks = get_tracks_by_ids(&[9999, track_id], &mut conn).unwrap();
+        assert_eq!(
+            tracks.iter().map(|track| track.id).collect::<Vec<_>>(),
+            vec![track_id]
+        );
+
+        assert!(get_tracks_by_ids(&[], &mut conn).unwrap().is_empty());
+
+        drop(conn);
+        drop(pool);
+        remove_test_database(&path);
+    }
 }

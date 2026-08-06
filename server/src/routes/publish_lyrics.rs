@@ -1,7 +1,10 @@
 use crate::{
     errors::ApiError,
+    lyricsfile::{
+        prepare_legacy_lyrics, prepare_stored_lyricsfile, LyricsfileTrackMetadata, PreparedLyrics,
+    },
     repositories::{lyrics_repository, track_repository},
-    utils::{invalidate_get_metadata_cache_for_track_id, is_valid_publish_token, strip_timestamp},
+    utils::is_valid_publish_token,
     AppState,
 };
 use anyhow::Result;
@@ -11,7 +14,6 @@ use axum::{
     Json,
 };
 use axum_macros::debug_handler;
-use regex::Regex;
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -28,24 +30,6 @@ pub struct PublishRequest {
     lyricsfile: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
-struct LyricsfileDocument {
-    metadata: Option<LyricsfileMetadata>,
-    lines: Option<Vec<LyricsfileLine>>,
-    plain: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-struct LyricsfileMetadata {
-    instrumental: Option<bool>,
-}
-
-#[derive(Deserialize, Default)]
-struct LyricsfileLine {
-    text: Option<String>,
-    start_ms: Option<u64>,
-}
-
 #[debug_handler]
 pub async fn route(
     headers: HeaderMap,
@@ -58,12 +42,8 @@ pub async fn route(
                 is_valid_publish_token(publish_token.to_str()?, &state.challenge_cache).await;
 
             if is_valid {
-                {
-                    let mut conn = state.pool.get()?;
-                    let track_id = publish_lyrics(&payload, &mut conn)?;
-
-                    invalidate_get_metadata_cache_for_track_id(&state, track_id).await;
-                }
+                let mut conn = state.pool.get()?;
+                publish_lyrics(&payload, &mut conn)?;
 
                 Ok(StatusCode::CREATED)
             } else {
@@ -75,13 +55,14 @@ pub async fn route(
 }
 
 fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<i64> {
+    let prepared = prepare_lyrics(payload)?;
     let mut tx = conn.transaction()?;
     let duration = payload.duration.round();
 
     let existing_track = track_repository::get_track_id_by_metadata_tx(
-        &payload.track_name.trim(),
-        &payload.artist_name.trim(),
-        &payload.album_name.trim(),
+        payload.track_name.trim(),
+        payload.artist_name.trim(),
+        payload.album_name.trim(),
         duration,
         &mut tx,
     )?;
@@ -89,128 +70,162 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<i64
     let track_id = match existing_track {
         Some(track_id) => track_id,
         None => track_repository::add_one_tx(
-            &payload.track_name.trim(),
-            &payload.artist_name.trim(),
-            &payload.album_name.trim(),
+            payload.track_name.trim(),
+            payload.artist_name.trim(),
+            payload.album_name.trim(),
             duration,
             &mut tx,
         )?,
     };
 
-    let lyricsfile = payload
-        .lyricsfile
-        .as_ref()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_owned());
-
-    let (plain_lyrics, synced_lyrics, is_instrumental) =
-        if let Some(lyricsfile) = lyricsfile.as_deref() {
-            let document = parse_lyricsfile(lyricsfile);
-            (
-                derive_plain_lyrics(document.as_ref()),
-                derive_synced_lyrics(document.as_ref()),
-                document
-                    .as_ref()
-                    .and_then(|document| document.metadata.as_ref())
-                    .and_then(|metadata| metadata.instrumental)
-                    .unwrap_or(false),
-            )
-        } else {
-            let mut plain_lyrics = payload
-                .plain_lyrics
-                .as_ref()
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_owned());
-            let synced_lyrics = payload
-                .synced_lyrics
-                .as_ref()
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_owned());
-
-            // Generate plain_lyrics from synced_lyrics
-            if plain_lyrics.is_none() && synced_lyrics.is_some() {
-                plain_lyrics = Some(strip_timestamp(synced_lyrics.as_deref().unwrap()));
-            }
-
-            // Create a regex to match "[au: instrumental]" or "[au:instrumental]"
-            let re = Regex::new(r"\[au:\s*instrumental\]").expect("Invalid regex");
-            let is_instrumental = synced_lyrics
-                .as_ref()
-                .map_or(false, |lyrics| re.is_match(lyrics));
-
-            (plain_lyrics, synced_lyrics, is_instrumental)
-        };
-
-    if is_instrumental && lyricsfile.is_none() {
-        // Mark the track as instrumental
-        lyrics_repository::add_one_tx(
-            &None,
-            &None,
-            &lyricsfile,
-            track_id,
-            true,
-            &Some("lrclib".to_owned()),
-            &mut tx,
-        )?;
-    } else {
-        lyrics_repository::add_one_tx(
-            &plain_lyrics,
-            &synced_lyrics,
-            &lyricsfile,
-            track_id,
-            false,
-            &Some("lrclib".to_owned()),
-            &mut tx,
-        )?;
-    }
+    lyrics_repository::add_one_tx(
+        &prepared.plain_lyrics,
+        &prepared.synced_lyrics,
+        &prepared.lyricsfile,
+        track_id,
+        prepared.instrumental,
+        &Some("lrclib".to_owned()),
+        &mut tx,
+    )?;
 
     tx.commit()?;
 
     Ok(track_id)
 }
 
-fn parse_lyricsfile(lyricsfile: &str) -> Option<LyricsfileDocument> {
-    serde_yaml::from_str::<LyricsfileDocument>(lyricsfile).ok()
-}
-
-fn derive_plain_lyrics(document: Option<&LyricsfileDocument>) -> Option<String> {
-    let document = document?;
-
-    if let Some(plain) = document.plain.as_ref().filter(|plain| !plain.is_empty()) {
-        return Some(plain.to_owned());
+fn prepare_lyrics(payload: &PublishRequest) -> Result<PreparedLyrics> {
+    if let Some(lyricsfile) = payload
+        .lyricsfile
+        .as_ref()
+        .filter(|content| !content.trim().is_empty())
+        .cloned()
+    {
+        return Ok(
+            prepare_stored_lyricsfile(lyricsfile.clone()).unwrap_or_else(|error| {
+                tracing::warn!(%error, "failed to derive legacy fields from published Lyricsfile");
+                PreparedLyrics {
+                    plain_lyrics: None,
+                    synced_lyrics: None,
+                    lyricsfile,
+                    instrumental: false,
+                }
+            }),
+        );
     }
 
-    let lines = document.lines.as_ref()?;
-    let plain = lines
-        .iter()
-        .filter_map(|line| line.text.as_deref())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    (!plain.is_empty()).then_some(plain)
+    let metadata = LyricsfileTrackMetadata::new(
+        &payload.track_name,
+        &payload.album_name,
+        &payload.artist_name,
+        payload.duration,
+    );
+    prepare_legacy_lyrics(
+        &metadata,
+        payload.plain_lyrics.as_deref(),
+        payload.synced_lyrics.as_deref(),
+        false,
+    )
 }
 
-fn derive_synced_lyrics(document: Option<&LyricsfileDocument>) -> Option<String> {
-    let lines = document?.lines.as_ref()?;
-    let synced = lines
-        .iter()
-        .filter_map(|line| {
-            let start_ms = line.start_ms?;
-            let text = line.text.as_deref()?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{db::migrate, lyricsfile::parse_lyricsfile};
 
-            Some(format!("{}{}", format_timestamp(start_ms), text))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    fn connection() -> Connection {
+        let mut connection = Connection::open_in_memory().unwrap();
+        migrate(&mut connection).unwrap();
+        connection
+    }
 
-    (!synced.is_empty()).then_some(synced)
-}
+    fn payload() -> PublishRequest {
+        PublishRequest {
+            track_name: "Test Song".to_owned(),
+            artist_name: "Test Artist".to_owned(),
+            album_name: "Test Album".to_owned(),
+            duration: 95.492,
+            plain_lyrics: None,
+            synced_lyrics: None,
+            lyricsfile: None,
+        }
+    }
 
-fn format_timestamp(start_ms: u64) -> String {
-    let total_seconds = start_ms / 1000;
-    let minutes = total_seconds / 60;
-    let seconds = total_seconds % 60;
-    let centiseconds = (start_ms % 1000) / 10;
+    #[test]
+    fn legacy_publish_generates_and_persists_lyricsfile() {
+        let mut connection = connection();
+        let mut payload = payload();
+        payload.synced_lyrics =
+            Some("[ar:Test Artist]\n[00:03.250]Second\n[00:01.5]First".to_owned());
+        payload.lyricsfile = Some(" \n".to_owned());
 
-    format!("[{minutes:02}:{seconds:02}.{centiseconds:02}]")
+        publish_lyrics(&payload, &mut connection).unwrap();
+
+        let row = connection
+            .query_row(
+                "SELECT plain_lyrics, synced_lyrics, lyricsfile, instrumental, has_lyricsfile FROM lyrics",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, bool>(3)?,
+                        row.get::<_, bool>(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(row.0.as_deref(), Some("Second\nFirst"));
+        assert_eq!(row.1, payload.synced_lyrics);
+        assert!(!row.3);
+        assert!(row.4);
+
+        let parsed = parse_lyricsfile(&row.2).unwrap();
+        assert_eq!(parsed.plain_lyrics.as_deref(), Some("Second\nFirst"));
+        assert_eq!(
+            parsed.synced_lyrics.as_deref(),
+            Some("[00:01.50]First\n[00:03.25]Second")
+        );
+
+        let duration_ms: i64 = serde_yaml::from_str::<serde_yaml::Value>(&row.2).unwrap()
+            ["metadata"]["duration_ms"]
+            .as_i64()
+            .unwrap();
+        assert_eq!(duration_ms, 95_492);
+    }
+
+    #[test]
+    fn supplied_instrumental_lyricsfile_wins_and_is_stored_unchanged() {
+        let mut connection = connection();
+        let mut payload = payload();
+        let lyricsfile = "version: '1.0'\nmetadata:\n  title: Test Song\n  artist: Test Artist\n  instrumental: true\nlines:\n  - text: ignored\n    start_ms: 1000\nplain: ignored\n";
+        payload.plain_lyrics = Some("legacy plain".to_owned());
+        payload.synced_lyrics = Some("[00:01.00]legacy synced".to_owned());
+        payload.lyricsfile = Some(lyricsfile.to_owned());
+
+        publish_lyrics(&payload, &mut connection).unwrap();
+
+        let row = connection
+            .query_row(
+                "SELECT plain_lyrics, synced_lyrics, lyricsfile, instrumental, has_lyricsfile FROM lyrics",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, bool>(3)?,
+                        row.get::<_, bool>(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(row.0, None);
+        assert_eq!(row.1, None);
+        assert_eq!(row.2, lyricsfile);
+        assert!(row.3);
+        assert!(row.4);
+    }
 }
