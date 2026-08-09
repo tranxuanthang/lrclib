@@ -1,5 +1,30 @@
 # LRCLIB
 
+## About This Project
+
+LRCLib is a **non-commercial, volunteer-driven** project dedicated to providing synchronized lyrics for music enthusiasts worldwide. This service is maintained by volunteers who are passionate about music and believe in making lyrics accessible to everyone.
+
+### Non-Commercial Nature
+
+This project is:
+- **Non-profit**: We do not generate revenue or profit from this service
+- **Volunteer-driven**: All contributions are made by volunteers in their free time
+- **Community-focused**: Built for the benefit of the music community
+
+### Legal Compliance
+
+We are committed to operating within legal boundaries:
+- We respect copyright holders' rights
+- We have a DMCA compliance policy (see [DMCA.md](DMCA.md))
+- We promptly respond to legitimate takedown requests
+- We encourage only authorized submissions
+
+### Contributing
+
+We welcome contributions from the community! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to participate. **Important**: Only submit content you have legal authorization to share.
+
+---
+
 ## Introduction
 
 LRCLIB server written in Rust with Axum and SQLite3 database.
@@ -9,6 +34,7 @@ This is the source code of [lrclib.net](https://lrclib.net) rewritten in Rust fr
 ## Setup
 
 Build the project:
+
 ```
 cargo build --release
 ```
@@ -60,85 +86,3 @@ podman run --rm -it -v lrclib-data:/data lrclib-rs:latest sqlite3 /data/db.sqlit
 ### Quadlet
 
 You can use Quadlet to run the Podman container in the background. It also handles auto-start the container after machine restart for you.
-
-Create a file named `lrclib.container` at `~/.config/containers/systemd/`:
-
-```
-mkdir -p $HOME/.config/containers/systemd/
-vi $HOME/.config/containers/systemd/lrclib.container
-```
-
-The example content of `lrclib.container`:
-
-```
-[Container]
-Image=lrclib-rs:latest
-PublishPort=3300:3300
-Volume=lrclib-data:/data
-ContainerName=lrclib-rs
-Environment=LRCLIB_LOG=info
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=multi-user.target default.target
-```
-
-Reload the daemon:
-
-```
-systemctl --user daemon-reload
-```
-
-Start the service:
-
-```
-systemctl --user start lrclib.service
-```
-
-Check the status to see if `lrclib.service` is actually running:
-
-```
-systemctl --user status lrclib.service
-```
-
-Restart when the container image is updated:
-
-```
-systemctl --user restart lrclib.service
-```
-
-## Donation
-
-Toss a coin to your developer?
-
-**GitHub Sponsors (Recommended - 100% of your support goes to the developer):**
-
-https://github.com/sponsors/tranxuanthang
-
-**Buy Me a Coffee:**
-
-https://www.buymeacoffee.com/thangtran
-
-**Paypal:**
-
-https://paypal.me/tranxuanthang98
-
-**Monero (XMR):**
-
-```
-43ZN5qDdGQhPGthFnngD8rjCHYLsEFBcyJjDC1GPZzVxWSfT8R48QCLNGyy6Z9LvatF5j8kSgv23DgJpixJg8bnmMnKm3b7
-```
-
-**Litecoin (LTC):**
-
-```
-ltc1q7texq5qsp59gclqlwf6asrqmhm98gruvz94a48
-```
-
-## Contact
-
-If you prefer to contact by email:
-
-[hoangtudevops@protonmail.com](mailto:hoangtudevops@protonmail.com)
