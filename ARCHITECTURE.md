@@ -11,10 +11,14 @@ Rust workspace for the LRCLIB API server.
 
 Most real behavior lives in `server/`.
 
+This is the public self-hosted product.
+
 ## Workspace Layout
 
 - `src/main.rs`: CLI dispatch for `serve` and one-shot maintenance commands.
-- `src/backfill_lyricsfiles.rs`: resumable Lyricsfile backfill orchestration, throttling, dry-run reporting, and exclusive process locking.
+- `src/backfill_lock.rs`: shared exclusive process lock keyed by database identity, used by the maintenance backfills.
+- `src/backfill_lyricsfiles.rs`: resumable Lyricsfile backfill orchestration, throttling, and dry-run reporting.
+- `src/backfill_word_sync.rs`: idempotent word-sync backfill sweep with `instr` prefiltering, dry-run sampling, progress reporting, and row limits.
 - `server/src/lib.rs`: thin crate facade that declares modules and re-exports the public server API.
 - `server/src/bootstrap.rs`: server startup, listener lifecycle, graceful shutdown, and runtime composition.
 - `server/src/metrics.rs`: bounded in-memory aggregate and route-specific latency histograms and interval counters.
@@ -93,7 +97,7 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 ### `GET /api/get`
 
 - Normalizes input with `utils::process_param`.
-- Single-key cache lookup: `get:v4:{track_name_lower}:{artist_name_lower}:{album_name_lower}:{duration_bucket}`. All requests use the cache (including duration-less requests).
+- Single-key cache lookup: `get:v5:{track_name_lower}:{artist_name_lower}:{album_name_lower}:{duration_bucket}`. All requests use the cache (including duration-less requests).
 - Coalescing via Moka's `try_get_with` on the same cache — concurrent misses for the same key share one database load.
 - On cache miss, queries `track_repository::get_track_by_metadata`.
 - Both hits (`Some`) and misses (`None`) are cached with 24h TTL / 4h idle.
@@ -104,7 +108,7 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 
 - Normalizes query params.
 - Uses `search_cache`.
-- Cache keys are versioned as `search:v3`.
+- Cache keys are versioned as `search:v4`.
 - On a cache miss, the Tantivy query and subsequent `track_repository::get_tracks_by_ids` SQLite join run in the same `spawn_blocking` task. The connection is acquired only after Tantivy returns nonempty ranked ids, and response order preserves the ranking.
 - If the index is unavailable, still catching up, or a Tantivy query fails, the search request fails; there is no FTS5 query fallback.
 - Concurrent misses for the same cache key are coalesced into one database load by Moka.
@@ -130,7 +134,8 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 - Instrumental markers (`[au: instrumental]`) produce a lyrics row with no text and `instrumental = true`.
 - For `lyricsfile` publishes, `instrumental` is populated by a best-effort YAML read of `metadata.instrumental`; instrumental rows have no stored plain or synced text.
 - Repository insert functions require a non-empty Lyricsfile, so all current API write paths set `has_lyricsfile = true`.
-- Metadata cache entries for the published track expire naturally via TTL (24h); publish does not actively invalidate them.
+- `has_word_sync` comes from `PreparedLyrics`, so supplied Lyricsfiles are detected during the same parse used to derive legacy fields; legacy plain/synced publishes always store `false`.
+- Metadata cache entries for the published track expire naturally via TTL (24h); publish does not actively invalidate them. Response-shape changes must bump the `get:`/`search:` cache key versions instead.
 
 ### `POST /api/flag`
 
@@ -141,12 +146,26 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 
 `lrclib backfill-lyricsfiles --database <FILE>` populates Lyricsfile for historical rows where `has_lyricsfile = false`.
 
+- Existing nonblank Lyricsfile is preserved and only its false presence flag is repaired; generated rows use legacy plain/synced text, stored instrumental state, and current track metadata.
+- The update changes only `lyricsfile`, `has_lyricsfile`, and `has_word_sync`; `created_at`, `updated_at`, legacy representations, source, instrumental state, and `tracks.last_lyrics_id` remain unchanged. `has_word_sync` is derived from a preserved Lyricsfile and is always false for generated legacy rows.
+- The batch update uses an exact compare-and-set against the selected Lyricsfile value. Concurrent changes are never overwritten or marked complete; they remain eligible for a later run.
+- `--dry-run` opens SQLite read-only, never applies migrations or takes the writer lock, and does not write.
+
+`lrclib backfill-word-sync --database <FILE>` detects word-level sync in stored Lyricsfiles and populates `has_word_sync`.
+
+- Detection is canonical: a row is word-synced when any line in its stored Lyricsfile has a non-empty `words` array (`lyricsfile::parse_lyricsfile`); legacy plain/synced inputs can never produce word timing.
+- The sweep scans `has_word_sync = false` rows in id order with a cheap `instr(lyricsfile, 'words')` prefilter, so only hinted Lyricsfiles are parsed in Rust. Instrumental files, malformed YAML, and false-positive hints are counted and left `false`.
+- `apply_word_sync_backfill_batch` flips rows to `true` only behind a `has_word_sync = false` guard; `created_at`, `updated_at`, and `tracks.last_lyrics_id` remain unchanged.
+- Rows with no stored Lyricsfile are correctly `false` and are skipped by the candidate query. The command is an idempotent full sweep rather than a drain: reruns re-check `false` rows, and `--limit` / `--start-after-id` support canaries and chunking. Each run takes `<database>.word-sync-backfill.lock`.
+- `backfill-lyricsfiles` also writes `has_word_sync` for its candidates (derived for preserved Lyricsfiles, `false` for generated ones), so the two maintenance commands can run in either order.
+- Defaults are 500 rows per pass and 50ms between write batches; `--sleep-ms 0` is intended for an offline run. `--dry-run` opens SQLite read-only, never applies migrations or takes the writer lock, and reports the sample scan/confirm counts.
+
 ## Data Model
 
 Core schema is in `server/migrations/`.
 
 - `tracks`: canonical track metadata plus normalized `*_lower` columns and `last_lyrics_id`.
-- `lyrics`: lyrics versions linked to a track; latest version is selected through `tracks.last_lyrics_id`. It also stores raw `lyricsfile` YAML plus `has_lyricsfile` for efficient presence/count queries. The column remains nullable for historical rows, but current repository writes require it.
+- `lyrics`: lyrics versions linked to a track; latest version is selected through `tracks.last_lyrics_id`. It also stores raw `lyricsfile` YAML plus `has_lyricsfile` for efficient presence/count queries. The column remains nullable for historical rows, but current repository writes require it. `has_word_sync` marks versions whose stored Lyricsfile contains at least one non-empty `lines[].words` array; it is `NOT NULL DEFAULT FALSE` and maintained by the write paths and the word-sync backfill.
 - `flags`: reports against a lyrics row.
 - `missing_tracks`: table created by migration 04; no code writes to it anymore.
 - `tracks_fts`: retained FTS5 virtual table over normalized track fields; it is not queried by `/api/search`.
@@ -160,11 +179,13 @@ Important DB behavior:
 - DB opens in WAL mode with tuned PRAGMAs in `server/src/db.rs`; connection-local PRAGMAs and a busy timeout are applied to every pooled connection. Startup logs the linked SQLite version plus the effective and compiled maximum mmap sizes, with all SQLite compile options available at debug level. `LRCLIB_MMAP_SIZE` and `LRCLIB_CACHE_SIZE` override the mmap and suggested page-cache limits, while `LRCLIB_POOL_MAX_SIZE` sets the r2d2 connection limit (default 16).
 - `LRCLIB_MAX_CONCURRENT_LOADS` (default 32) and `LRCLIB_LOAD_QUEUE_MS` (default 250) control the blocking-load admission. `LRCLIB_MAX_BLOCKING_THREADS` optionally caps the tokio blocking thread pool (only when explicitly set; default follows tokio). When permitted loads are exhausted, `/api/get` and `/api/search` return `503 + Retry-After: 1`.
 - `idx_lyrics_has_lyricsfile` supports efficient counts and filters over Lyricsfile adoption.
+- `idx_lyrics_has_word_sync` is a partial index over `has_word_sync = TRUE`; it stays small because word-synced rows are the exception.
 
 Current lyrics API responses remain backward-compatible:
 
 - `plainLyrics` and `syncedLyrics` are still returned for legacy rows
 - `lyricsfile` is returned as an additional raw YAML field when present
+- `hasWordSync` reports the current lyrics version's word-level sync flag
 
 ## Search Index (Tantivy)
 
@@ -199,5 +220,6 @@ If you change matching behavior, review both:
 - Most edits belong in `server/`, not the root crate.
 - Preserve write transactions around track + lyrics creation.
 - All new lyrics repository writes must supply a non-empty Lyricsfile; old rows may still contain `NULL`.
-- Historical Lyricsfile population belongs in the root maintenance CLI; keep schema-aware batch SQL and its timestamp-invariance tests in `lyrics_repository`.
-- Schema changes require a new migration and usually repository updates.
+- All new lyrics repository writes must pass `PreparedLyrics.has_word_sync`; word timing only exists in Lyricsfile `lines[].words`, never in legacy plain/synced text.
+- Historical Lyricsfile and word-sync population belongs in the root maintenance CLI; keep schema-aware batch SQL and its timestamp-invariance tests in `lyrics_repository`.
+- Schema changes require a new migration and usually repository updates. Migrations are append-only: never edit or renumber an applied migration; add a new numbered migration for each schema change.

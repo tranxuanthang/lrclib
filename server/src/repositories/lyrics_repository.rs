@@ -1,4 +1,6 @@
-use crate::entities::lyrics::{LyricsfileBackfillCandidate, LyricsfileBackfillUpdate};
+use crate::entities::lyrics::{
+    LyricsfileBackfillCandidate, LyricsfileBackfillUpdate, WordSyncBackfillCandidate,
+};
 use anyhow::{ensure, Context, Result};
 use chrono::prelude::*;
 use indoc::indoc;
@@ -10,6 +12,7 @@ pub fn add_one(
     lyricsfile: &str,
     track_id: i64,
     instrumental: bool,
+    has_word_sync: bool,
     source: &Option<String>,
     conn: &mut Connection,
 ) -> Result<i64> {
@@ -29,13 +32,14 @@ pub fn add_one(
       has_plain_lyrics,
       has_synced_lyrics,
       has_lyricsfile,
+      has_word_sync,
       instrumental,
       track_id,
       source,
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   "};
     let mut statement = conn.prepare(query)?;
     let row_id = statement.insert((
@@ -45,6 +49,7 @@ pub fn add_one(
         plain_lyrics.is_some(),
         synced_lyrics.is_some(),
         true,
+        has_word_sync,
         instrumental,
         track_id,
         source,
@@ -60,6 +65,7 @@ pub fn add_one_tx(
     lyricsfile: &str,
     track_id: i64,
     instrumental: bool,
+    has_word_sync: bool,
     source: &Option<String>,
     conn: &mut Transaction,
 ) -> Result<i64> {
@@ -79,13 +85,14 @@ pub fn add_one_tx(
       has_plain_lyrics,
       has_synced_lyrics,
       has_lyricsfile,
+      has_word_sync,
       instrumental,
       track_id,
       source,
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   "};
     let mut statement = conn.prepare(query)?;
     let row_id = statement.insert((
@@ -95,6 +102,7 @@ pub fn add_one_tx(
         plain_lyrics.is_some(),
         synced_lyrics.is_some(),
         true,
+        has_word_sync,
         instrumental,
         track_id,
         source,
@@ -206,7 +214,7 @@ pub fn apply_lyricsfile_backfill_batch(
         let mut statement = tx.prepare_cached(
             "
             UPDATE lyrics
-            SET lyricsfile = ?, has_lyricsfile = TRUE
+            SET lyricsfile = ?, has_lyricsfile = TRUE, has_word_sync = ?
             WHERE id = ?
               AND has_lyricsfile = FALSE
               AND lyricsfile IS ?
@@ -214,8 +222,79 @@ pub fn apply_lyricsfile_backfill_batch(
         )?;
         let mut updated = 0usize;
         for update in updates {
-            updated +=
-                statement.execute((&update.lyricsfile, update.id, &update.expected_lyricsfile))?;
+            updated += statement.execute((
+                &update.lyricsfile,
+                update.has_word_sync,
+                update.id,
+                &update.expected_lyricsfile,
+            ))?;
+        }
+        updated
+    };
+    tx.commit()?;
+
+    Ok(updated)
+}
+
+pub fn get_word_sync_backfill_candidates(
+    after_id: i64,
+    batch_size: usize,
+    conn: &mut Connection,
+) -> Result<Vec<WordSyncBackfillCandidate>> {
+    ensure!(batch_size > 0, "batch size must be greater than zero");
+    let batch_size = i64::try_from(batch_size).context("batch size is too large")?;
+    let mut statement = conn.prepare_cached(
+        "
+        SELECT
+          id,
+          CASE WHEN instr(lyricsfile, 'words') > 0 THEN lyricsfile END AS maybe_lyricsfile
+        FROM lyrics
+        WHERE has_word_sync = FALSE
+          AND lyricsfile IS NOT NULL
+          AND id > ?
+        ORDER BY id
+        LIMIT ?
+        ",
+    )?;
+    let mut rows = statement.query((after_id, batch_size))?;
+    let mut candidates = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id = row
+            .get("id")
+            .context("failed to read id for word-sync backfill candidate")?;
+        candidates.push(WordSyncBackfillCandidate {
+            id,
+            lyricsfile: row
+                .get("maybe_lyricsfile")
+                .with_context(|| format!("failed to read lyricsfile for lyrics row {id}"))?,
+        });
+    }
+
+    Ok(candidates)
+}
+
+/// Marks candidate rows as word-synced. Callers pass only rows whose Lyricsfile
+/// parsed with a non-empty `words` array; the `has_word_sync = FALSE` guard
+/// keeps concurrent changes from being overwritten.
+pub fn apply_word_sync_backfill_batch(ids: &[i64], conn: &mut Connection) -> Result<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let tx = conn.transaction()?;
+    let updated = {
+        // Deliberately leave created_at and updated_at untouched during backfill.
+        let mut statement = tx.prepare_cached(
+            "
+            UPDATE lyrics
+            SET has_word_sync = TRUE
+            WHERE id = ?
+              AND has_word_sync = FALSE
+            ",
+        )?;
+        let mut updated = 0usize;
+        for id in ids {
+            updated += statement.execute([id])?;
         }
         updated
     };
@@ -339,6 +418,7 @@ mod tests {
             id: lyrics_id,
             lyricsfile: prepared.lyricsfile,
             expected_lyricsfile: None,
+            has_word_sync: prepared.has_word_sync,
         };
 
         assert_eq!(
@@ -403,6 +483,7 @@ mod tests {
                 id: lyrics_id,
                 lyricsfile: existing.to_owned(),
                 expected_lyricsfile: Some(existing.to_owned()),
+                has_word_sync: false,
             }],
             &mut connection,
         )
@@ -424,11 +505,13 @@ mod tests {
                     id: blank_id,
                     lyricsfile: "valid".to_owned(),
                     expected_lyricsfile: None,
+                    has_word_sync: false,
                 },
                 LyricsfileBackfillUpdate {
                     id: lyrics_id,
                     lyricsfile: "  ".to_owned(),
                     expected_lyricsfile: Some(existing.to_owned()),
+                    has_word_sync: false,
                 },
             ],
             &mut connection,
@@ -495,6 +578,7 @@ mod tests {
                 id: lyrics_id,
                 lyricsfile: "stale generated content".to_owned(),
                 expected_lyricsfile: None,
+                has_word_sync: false,
             }],
             &mut connection,
         )
@@ -531,6 +615,7 @@ mod tests {
                 id: lyrics_id,
                 lyricsfile: generated.to_owned(),
                 expected_lyricsfile: Some(whitespace.to_owned()),
+                has_word_sync: false,
             }],
             &mut connection,
         )
@@ -544,5 +629,138 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, generated);
+    }
+
+    #[test]
+    fn add_one_persists_has_word_sync() {
+        let mut connection = connection();
+        let track_id = track_repository::add_one(
+            "Word Sync Song",
+            "Backfill Artist",
+            "Backfill Album",
+            95.492,
+            &mut connection,
+        )
+        .unwrap();
+        let lyricsfile = "version: '1.0'\nmetadata:\n  title: Word Sync Song\n  artist: Backfill Artist\n  instrumental: false\nlines:\n  - text: Hello world\n    start_ms: 1000\n    words:\n      - text: Hello\n        start_ms: 1000\n      - text: world\n        start_ms: 1500\n";
+        let lyrics_id = add_one(
+            &None,
+            &None,
+            lyricsfile,
+            track_id,
+            false,
+            true,
+            &Some("test".to_owned()),
+            &mut connection,
+        )
+        .unwrap();
+
+        let stored: bool = connection
+            .query_row(
+                "SELECT has_word_sync FROM lyrics WHERE id = ?",
+                [lyrics_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored);
+    }
+
+    #[test]
+    fn lyricsfile_backfill_copies_preserved_word_sync_state() {
+        let mut connection = connection();
+        let existing = "version: '1.0'\nmetadata:\n  title: Preserved Words\n  artist: Artist\n  instrumental: false\nlines:\n  - text: Hello world\n    start_ms: 1000\n    words:\n      - text: Hello\n        start_ms: 1000\n      - text: world\n        start_ms: 1500\n";
+        let (_, lyrics_id) =
+            insert_historical_lyrics(&mut connection, "Preserved Words", Some(existing));
+
+        let updated = apply_lyricsfile_backfill_batch(
+            &[LyricsfileBackfillUpdate {
+                id: lyrics_id,
+                lyricsfile: existing.to_owned(),
+                expected_lyricsfile: Some(existing.to_owned()),
+                has_word_sync: true,
+            }],
+            &mut connection,
+        )
+        .unwrap();
+        assert_eq!(updated, 1);
+
+        let (has_lyricsfile, has_word_sync): (bool, bool) = connection
+            .query_row(
+                "SELECT has_lyricsfile, has_word_sync FROM lyrics WHERE id = ?",
+                [lyrics_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(has_lyricsfile);
+        assert!(has_word_sync);
+    }
+
+    #[test]
+    fn word_sync_backfill_prefilters_confirms_and_marks_candidates() {
+        let mut connection = connection();
+        let word_synced = "version: '1.0'\nmetadata:\n  title: Word\n  artist: Artist\n  instrumental: false\nlines:\n  - text: Hello world\n    start_ms: 1000\n    words:\n      - text: Hello\n        start_ms: 1000\n      - text: world\n        start_ms: 1500\n";
+        let false_positive = "version: '1.0'\nmetadata:\n  title: Plain\n  artist: Artist\n  instrumental: false\nlines: []\nplain: |\n  talking about words: nothing timed\n";
+        let line_synced = "version: '1.0'\nmetadata:\n  title: Line\n  artist: Artist\n  instrumental: false\nlines:\n  - text: Hello world\n    start_ms: 1000\n";
+        let (_, word_id) =
+            insert_historical_lyrics(&mut connection, "Word Song", Some(word_synced));
+        let (_, plain_id) =
+            insert_historical_lyrics(&mut connection, "Plain Song", Some(false_positive));
+        let (_, line_id) =
+            insert_historical_lyrics(&mut connection, "Line Song", Some(line_synced));
+        let (_, missing_id) = insert_historical_lyrics(&mut connection, "Missing Song", None);
+
+        let candidates = get_word_sync_backfill_candidates(0, 10, &mut connection).unwrap();
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.id)
+                .collect::<Vec<_>>(),
+            vec![word_id, plain_id, line_id]
+        );
+        assert!(candidates[0].lyricsfile.is_some());
+        assert!(candidates[1].lyricsfile.is_some());
+        assert!(candidates[2].lyricsfile.is_none());
+
+        // Only the confirmed word-synced row is marked; the hinted plain-only
+        // row parses without words and stays FALSE.
+        assert_eq!(
+            apply_word_sync_backfill_batch(&[word_id], &mut connection).unwrap(),
+            1
+        );
+        assert_eq!(
+            apply_word_sync_backfill_batch(&[word_id], &mut connection).unwrap(),
+            0
+        );
+
+        let flags = connection
+            .query_row(
+                "SELECT SUM(has_word_sync), COUNT(*) FROM lyrics",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(flags, (1, 4));
+        let missing_flag: bool = connection
+            .query_row(
+                "SELECT has_word_sync FROM lyrics WHERE id = ?",
+                [missing_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!missing_flag);
+
+        // The marked row drops out of later pages.
+        let next = get_word_sync_backfill_candidates(word_id, 10, &mut connection).unwrap();
+        assert_eq!(
+            next.iter()
+                .map(|candidate| candidate.id)
+                .collect::<Vec<_>>(),
+            vec![plain_id, line_id]
+        );
+        assert!(
+            get_word_sync_backfill_candidates(line_id, 10, &mut connection)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

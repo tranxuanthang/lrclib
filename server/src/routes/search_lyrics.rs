@@ -30,6 +30,7 @@ pub struct TrackResponse {
     album_name: Option<String>,
     duration: Option<f64>,
     instrumental: bool,
+    has_word_sync: bool,
     plain_lyrics: Option<String>,
     synced_lyrics: Option<String>,
     lyricsfile: Option<String>,
@@ -52,7 +53,7 @@ pub async fn route(
 
     // Generate a cache key based on query parameters
     let cache_key = format!(
-        "search:v3:{}:{}:{}:{}",
+        "search:v4:{}:{}:{}:{}",
         q.as_deref().unwrap_or_default(),
         track_name.as_deref().unwrap_or_default(),
         artist_name.as_deref().unwrap_or_default(),
@@ -106,6 +107,11 @@ fn create_response(tracks: Vec<SimpleTrack>) -> Vec<TrackResponse> {
                 None => false,
             };
 
+            let has_word_sync = match track.last_lyrics {
+                Some(ref lyrics) => lyrics.has_word_sync,
+                None => false,
+            };
+
             let lyricsfile = match track.last_lyrics {
                 Some(ref lyrics) => lyrics.lyricsfile.to_owned(),
                 None => None,
@@ -119,6 +125,7 @@ fn create_response(tracks: Vec<SimpleTrack>) -> Vec<TrackResponse> {
                 album_name: track.album_name.to_owned(),
                 duration: track.duration,
                 instrumental,
+                has_word_sync,
                 plain_lyrics,
                 synced_lyrics,
                 lyricsfile,
@@ -364,6 +371,7 @@ mod tests {
                 "version: '1.0'\nmetadata:\n  title: Benchmark Song\n  artist: Test Artist\n  instrumental: false\nlines: []\nplain: Benchmark lyrics\n",
                 track_id,
                 false,
+                false,
                 &Some("test".to_owned()),
                 conn,
             )
@@ -392,9 +400,52 @@ mod tests {
         assert!(test
             .state
             .search_cache
-            .get("search:v3:benchmark song:::")
+            .get("search:v4:benchmark song:::")
             .await
             .is_some());
+
+        test.cleanup();
+    }
+
+    #[tokio::test]
+    async fn response_includes_has_word_sync() {
+        let test = test_state_with_ready_search_index(|conn| {
+            let track_id = track_repository::add_one(
+                "Word Sync Search",
+                "Test Artist",
+                "Test Album",
+                180.0,
+                conn,
+            )
+            .unwrap();
+            lyrics_repository::add_one(
+                &None,
+                &None,
+                "version: '1.0'\nmetadata:\n  title: Word Sync Search\n  artist: Test Artist\n  instrumental: false\nlines:\n  - text: Hello world\n    start_ms: 1000\n    words:\n      - text: 'Hello '\n        start_ms: 1000\n      - text: world\n        start_ms: 1500\n",
+                track_id,
+                false,
+                true,
+                &Some("test".to_owned()),
+                conn,
+            )
+            .unwrap();
+        })
+        .await;
+
+        let response = route(
+            Query(QueryParams {
+                q: Some("Word Sync Search".to_owned()),
+                track_name: None,
+                artist_name: None,
+                album_name: None,
+            }),
+            State(test.state.clone()),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("search failed"));
+
+        assert_eq!(response.0.len(), 1);
+        assert!(response.0[0].has_word_sync);
 
         test.cleanup();
     }

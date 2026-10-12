@@ -38,6 +38,7 @@ pub struct ParsedLyricsfile {
     pub plain_lyrics: Option<String>,
     pub synced_lyrics: Option<String>,
     pub instrumental: bool,
+    pub has_word_sync: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -46,6 +47,7 @@ pub struct PreparedLyrics {
     pub synced_lyrics: Option<String>,
     pub lyricsfile: String,
     pub instrumental: bool,
+    pub has_word_sync: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -210,6 +212,8 @@ fn prepare_legacy_lyrics_internal(
         synced_lyrics,
         lyricsfile,
         instrumental,
+        // Legacy plain/synced inputs have no way to express word timing.
+        has_word_sync: false,
     })
 }
 
@@ -221,6 +225,7 @@ pub fn prepare_stored_lyricsfile(lyricsfile: String) -> Result<PreparedLyrics> {
         synced_lyrics: parsed.synced_lyrics,
         lyricsfile,
         instrumental: parsed.instrumental,
+        has_word_sync: parsed.has_word_sync,
     })
 }
 
@@ -234,6 +239,8 @@ pub fn parse_lyricsfile(lyricsfile: &str) -> Result<ParsedLyricsfile> {
             ..ParsedLyricsfile::default()
         });
     }
+
+    let has_word_sync = document.lines.iter().any(|line| !line.words.is_empty());
 
     let synced_lyrics = document
         .lines
@@ -260,7 +267,18 @@ pub fn parse_lyricsfile(lyricsfile: &str) -> Result<ParsedLyricsfile> {
         plain_lyrics,
         synced_lyrics,
         instrumental: false,
+        has_word_sync,
     })
+}
+
+/// Best-effort word-sync detection for stored or incoming Lyricsfile text.
+///
+/// Parse failures are treated as "no word sync"; write paths store malformed
+/// Lyricsfiles as-is and already surface the parse error separately.
+pub fn lyricsfile_has_word_sync(lyricsfile: &str) -> bool {
+    parse_lyricsfile(lyricsfile)
+        .map(|parsed| parsed.has_word_sync)
+        .unwrap_or(false)
 }
 
 pub fn retarget_lyricsfile(
@@ -599,6 +617,7 @@ plain: "  "
                 plain_lyrics: Some("Word sync".to_owned()),
                 synced_lyrics: Some("[00:12.49]Word sync".to_owned()),
                 instrumental: false,
+                has_word_sync: true,
             }
         );
 
@@ -610,6 +629,80 @@ plain: "  "
                 ..ParsedLyricsfile::default()
             }
         );
+    }
+
+    #[test]
+    fn detects_word_sync_only_from_non_empty_word_arrays() {
+        let word_synced = r#"
+metadata:
+  instrumental: false
+lines:
+  - text: Hello world
+    start_ms: 1000
+    words:
+      - text: "Hello "
+      - text: world
+"#;
+        let line_synced = r#"
+metadata:
+  instrumental: false
+lines:
+  - text: Hello world
+    start_ms: 1000
+"#;
+        let empty_words = r#"
+metadata:
+  instrumental: false
+lines:
+  - text: Hello world
+    start_ms: 1000
+    words: []
+"#;
+        let words_only_in_plain = r#"
+metadata:
+  instrumental: false
+lines: []
+plain: |
+  words: not a word timing array
+"#;
+
+        assert!(parse_lyricsfile(word_synced).unwrap().has_word_sync);
+        assert!(!parse_lyricsfile(line_synced).unwrap().has_word_sync);
+        assert!(!parse_lyricsfile(empty_words).unwrap().has_word_sync);
+        assert!(!parse_lyricsfile(words_only_in_plain).unwrap().has_word_sync);
+        assert!(lyricsfile_has_word_sync(word_synced));
+        assert!(!lyricsfile_has_word_sync("not: [valid"));
+    }
+
+    #[test]
+    fn legacy_preparation_never_reports_word_sync() {
+        let prepared =
+            prepare_legacy_lyrics(&metadata(), None, Some("[00:01.00]Hello world"), false).unwrap();
+
+        assert!(!prepared.has_word_sync);
+    }
+
+    #[test]
+    fn stored_preparation_reports_word_sync() {
+        let lyricsfile = r#"
+metadata:
+  title: Test Song
+  artist: Test Artist
+  instrumental: false
+lines:
+  - text: Hello world
+    start_ms: 1000
+    words:
+      - text: "Hello "
+        start_ms: 1000
+      - text: world
+        start_ms: 1500
+plain: |
+  Hello world
+"#;
+        let prepared = prepare_stored_lyricsfile(lyricsfile.to_owned()).unwrap();
+
+        assert!(prepared.has_word_sync);
     }
 
     #[test]

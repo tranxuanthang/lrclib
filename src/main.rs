@@ -2,7 +2,9 @@ use clap::{Parser, Subcommand};
 use server::serve;
 use std::path::PathBuf;
 
+mod backfill_lock;
 mod backfill_lyricsfiles;
+mod backfill_word_sync;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -54,6 +56,41 @@ enum Commands {
         #[arg(long, default_value_t = 10_000)]
         progress_every: usize,
     },
+
+    /// Detect word-level sync in stored Lyricsfiles and populate has_word_sync
+    BackfillWordSync {
+        /// Path to the database file
+        #[arg(short, long, value_name = "FILE", env = "LRCLIB_DATABASE_FILE")]
+        database: PathBuf,
+
+        /// Maximum rows scanned in one pass
+        #[arg(long, default_value_t = 500)]
+        batch_size: usize,
+
+        /// Delay between write batches; use zero for offline backfill
+        #[arg(long, default_value_t = 50)]
+        sleep_ms: u64,
+
+        /// Only scan rows with an id greater than this
+        #[arg(long, default_value_t = 0)]
+        start_after_id: i64,
+
+        /// Stop after scanning this many rows
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Scan a sample and report results without writing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Number of candidates scanned during a dry run
+        #[arg(long, default_value_t = 1000)]
+        sample_size: usize,
+
+        /// Report progress after this many scanned rows
+        #[arg(long, default_value_t = 10_000)]
+        progress_every: usize,
+    },
 }
 
 fn main() {
@@ -101,6 +138,31 @@ async fn run() {
             };
             if let Err(error) = backfill_lyricsfiles::run(options).await {
                 eprintln!("Lyricsfile backfill failed: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::BackfillWordSync {
+            database,
+            batch_size,
+            sleep_ms,
+            start_after_id,
+            limit,
+            dry_run,
+            sample_size,
+            progress_every,
+        }) => {
+            let options = backfill_word_sync::BackfillOptions {
+                database: database.to_owned(),
+                batch_size: *batch_size,
+                sleep_ms: *sleep_ms,
+                start_after_id: *start_after_id,
+                limit: *limit,
+                dry_run: *dry_run,
+                sample_size: *sample_size,
+                progress_every: *progress_every,
+            };
+            if let Err(error) = backfill_word_sync::run(options).await {
+                eprintln!("Word-sync backfill failed: {error:#}");
                 std::process::exit(1);
             }
         }

@@ -38,6 +38,7 @@ pub struct TrackResponse {
     album_name: Option<String>,
     duration: Option<f64>,
     instrumental: bool,
+    has_word_sync: bool,
     plain_lyrics: Option<String>,
     synced_lyrics: Option<String>,
     lyricsfile: Option<String>,
@@ -121,7 +122,7 @@ fn build_cache_key(
 ) -> String {
     let album = album_name_lower.unwrap_or("");
     let bucket = duration.map(|d| d.round() as i64).unwrap_or(0);
-    format!("get:v4:{track_name_lower}:{artist_name_lower}:{album}:{bucket}")
+    format!("get:v5:{track_name_lower}:{artist_name_lower}:{album}:{bucket}")
 }
 
 async fn load_metadata_response(
@@ -195,6 +196,11 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
         None => false,
     };
 
+    let has_word_sync = match track.last_lyrics {
+        Some(ref lyrics) => lyrics.has_word_sync,
+        None => false,
+    };
+
     let lyricsfile = match track.last_lyrics {
         Some(ref lyrics) => lyrics.lyricsfile.to_owned(),
         None => None,
@@ -208,6 +214,7 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
         album_name: track.album_name.to_owned(),
         duration: track.duration,
         instrumental,
+        has_word_sync,
         plain_lyrics,
         synced_lyrics,
         lyricsfile,

@@ -38,13 +38,13 @@ Use these variables to optimize memory usage in low traffic and/or low memory si
 Build the image:
 
 ```
-podman build -t lrclib-rs:latest -f Dockerfile .
+podman build -t lrclib-oss:latest -f Dockerfile .
 ```
 
 Run the container:
 
 ```
-podman run --rm -it -d -v lrclib-data:/data -p 3300:3300 -e LRCLIB_LOG=info --name lrclib-rs lrclib-rs:latest
+podman run --rm -it -d -v lrclib-data:/data -p 3300:3300 -e LRCLIB_LOG=info --name lrclib-oss lrclib-oss:latest
 ```
 
 Server will be available at http://0.0.0.0:3300
@@ -54,7 +54,7 @@ Server will be available at http://0.0.0.0:3300
 Run the following command to directly interact with the database in command line:
 
 ```
-podman run --rm -it -v lrclib-data:/data lrclib-rs:latest sqlite3 /data/db.sqlite3
+podman run --rm -it -v lrclib-data:/data lrclib-oss:latest sqlite3 /data/db.sqlite3
 ```
 
 ### Quadlet
@@ -72,10 +72,10 @@ The example content of `lrclib.container`:
 
 ```
 [Container]
-Image=lrclib-rs:latest
+Image=lrclib-oss:latest
 PublishPort=3300:3300
 Volume=lrclib-data:/data
-ContainerName=lrclib-rs
+ContainerName=lrclib-oss
 Environment=LRCLIB_LOG=info
 
 [Service]

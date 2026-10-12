@@ -19,6 +19,7 @@ pub struct TrackResponse {
     album_name: Option<String>,
     duration: Option<f64>,
     instrumental: bool,
+    has_word_sync: bool,
     plain_lyrics: Option<String>,
     synced_lyrics: Option<String>,
     lyricsfile: Option<String>,
@@ -55,6 +56,11 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
         None => false,
     };
 
+    let has_word_sync = match track.last_lyrics {
+        Some(ref lyrics) => lyrics.has_word_sync,
+        None => false,
+    };
+
     let lyricsfile = match track.last_lyrics {
         Some(ref lyrics) => lyrics.lyricsfile.to_owned(),
         None => None,
@@ -68,6 +74,7 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
         album_name: track.album_name.to_owned(),
         duration: track.duration,
         instrumental,
+        has_word_sync,
         plain_lyrics,
         synced_lyrics,
         lyricsfile,
