@@ -1,12 +1,12 @@
 FROM docker.io/rust:1.91-alpine3.22 as builder
 RUN apk add --no-cache alpine-sdk
-WORKDIR /usr/src/lrclib-rs
+WORKDIR /usr/src/lrclib-oss
 COPY . .
 ENV CFLAGS="-DSQLITE_MAX_MMAP_SIZE=0x4000000000"
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/usr/src/lrclib-rs/target \
-    cargo build --release --workspace && \
+    --mount=type=cache,target=/usr/src/lrclib-oss/target \
+    cargo build --release --workspace --locked && \
     cp target/release/lrclib /usr/local/bin/lrclib
 
 FROM alpine:3.22

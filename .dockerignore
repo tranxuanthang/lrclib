@@ -1,3 +1,6 @@
+/.git
+**/.git
 /target
+**/target
 /*.sqlite3*
 /queue-data*

@@ -1,13 +1,15 @@
-use anyhow::{anyhow, ensure, Context, Result};
+use crate::backfill_lock::BackfillLock;
+use anyhow::{ensure, Context, Result};
 use server::{
     entities::lyrics::{LyricsfileBackfillCandidate, LyricsfileBackfillUpdate},
-    lyricsfile::{prepare_legacy_lyrics_preserving_instrumental, LyricsfileTrackMetadata},
+    lyricsfile::{
+        lyricsfile_has_word_sync, prepare_legacy_lyrics_preserving_instrumental,
+        LyricsfileTrackMetadata,
+    },
     repositories::lyrics_repository,
 };
 use std::{
-    fs::{File, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -38,10 +40,6 @@ pub struct BackfillSummary {
 struct PreparedUpdate {
     update: LyricsfileBackfillUpdate,
     generated: bool,
-}
-
-struct BackfillLock {
-    _file: File,
 }
 
 pub async fn run(options: BackfillOptions) -> Result<BackfillSummary> {
@@ -106,7 +104,11 @@ pub async fn run(options: BackfillOptions) -> Result<BackfillSummary> {
         return Ok(summary);
     }
 
-    let _lock = BackfillLock::acquire(&database)?;
+    let _lock = BackfillLock::acquire(
+        &database,
+        ".lyricsfile-backfill.lock",
+        "Lyricsfile backfill",
+    )?;
     let pool = server::db::init_db(&database)
         .with_context(|| format!("failed to open database {}", database.display()))?;
     let mut conn = pool.get()?;
@@ -213,6 +215,7 @@ fn prepare_update(candidate: LyricsfileBackfillCandidate) -> Result<PreparedUpda
                 id: candidate.id,
                 lyricsfile: lyricsfile.clone(),
                 expected_lyricsfile,
+                has_word_sync: lyricsfile_has_word_sync(lyricsfile),
             },
             generated: false,
         });
@@ -242,6 +245,7 @@ fn prepare_update(candidate: LyricsfileBackfillCandidate) -> Result<PreparedUpda
             id: candidate.id,
             lyricsfile: prepared.lyricsfile,
             expected_lyricsfile,
+            has_word_sync: prepared.has_word_sync,
         },
         generated: true,
     })
@@ -288,38 +292,14 @@ fn print_summary(summary: &BackfillSummary) {
     );
 }
 
-impl BackfillLock {
-    fn acquire(database: &Path) -> Result<Self> {
-        let database = std::fs::canonicalize(database)
-            .with_context(|| format!("failed to resolve database path {}", database.display()))?;
-        let mut lock_path = database.as_os_str().to_os_string();
-        lock_path.push(".lyricsfile-backfill.lock");
-        let lock_path = PathBuf::from(lock_path);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&lock_path)
-            .with_context(|| format!("failed to open backfill lock {}", lock_path.display()))?;
-        file.try_lock().map_err(|error| {
-            anyhow!(
-                "another Lyricsfile backfill holds {}: {error}",
-                lock_path.display()
-            )
-        })?;
-        file.set_len(0)?;
-        writeln!(file, "pid={}", std::process::id())?;
-
-        Ok(Self { _file: file })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use server::repositories::track_repository;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        path::Path,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn test_database_path() -> PathBuf {
         let unique = SystemTime::now()
@@ -426,37 +406,6 @@ mod tests {
         assert_eq!(complete.selected, 0);
         assert_eq!(complete.updated, 0);
 
-        cleanup(&database);
-    }
-
-    #[test]
-    fn exclusive_lock_rejects_a_second_backfill() {
-        let database = test_database_path();
-        File::create(&database).unwrap();
-
-        let first = BackfillLock::acquire(&database).unwrap();
-        assert!(BackfillLock::acquire(&database).is_err());
-        drop(first);
-        assert!(BackfillLock::acquire(&database).is_ok());
-
-        cleanup(&database);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn exclusive_lock_uses_canonical_database_identity() {
-        use std::os::unix::fs::symlink;
-
-        let database = test_database_path();
-        let alias = database.with_extension("alias.sqlite3");
-        File::create(&database).unwrap();
-        symlink(&database, &alias).unwrap();
-
-        let first = BackfillLock::acquire(&database).unwrap();
-        assert!(BackfillLock::acquire(&alias).is_err());
-        drop(first);
-
-        let _ = std::fs::remove_file(alias);
         cleanup(&database);
     }
 }

@@ -15,12 +15,16 @@ use std::collections::HashMap;
 /// Maps a row containing track columns joined with the current lyrics row.
 fn simple_track_from_row(row: &rusqlite::Row) -> rusqlite::Result<SimpleTrack> {
     let instrumental = row.get::<_, Option<bool>>("instrumental")?.unwrap_or(false);
+    let has_word_sync = row
+        .get::<_, Option<bool>>("has_word_sync")?
+        .unwrap_or(false);
 
     let last_lyrics = SimpleLyrics {
         plain_lyrics: row.get("plain_lyrics")?,
         synced_lyrics: row.get("synced_lyrics")?,
         lyricsfile: row.get("lyricsfile")?,
         instrumental,
+        has_word_sync,
     };
 
     Ok(SimpleTrack {
@@ -45,7 +49,8 @@ pub fn get_track_by_id(track_id: i64, conn: &mut Connection) -> Result<Option<Si
       lyrics.instrumental,
       lyrics.plain_lyrics,
       lyrics.synced_lyrics,
-      lyrics.lyricsfile
+      lyrics.lyricsfile,
+      lyrics.has_word_sync
     FROM
       tracks
       LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
@@ -158,7 +163,8 @@ pub fn get_track_by_metadata(
       lyrics.instrumental,
       lyrics.plain_lyrics,
       lyrics.synced_lyrics,
-      lyrics.lyricsfile
+      lyrics.lyricsfile,
+      lyrics.has_word_sync
     FROM
       tracks
       LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
@@ -233,7 +239,8 @@ pub fn get_tracks_by_ids(track_ids: &[i64], conn: &mut Connection) -> Result<Vec
       lyrics.instrumental,
       lyrics.plain_lyrics,
       lyrics.synced_lyrics,
-      lyrics.lyricsfile
+      lyrics.lyricsfile,
+      lyrics.has_word_sync
     FROM
       tracks
       LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id

@@ -84,6 +84,7 @@ fn publish_lyrics(payload: &PublishRequest, conn: &mut Connection) -> Result<i64
         &prepared.lyricsfile,
         track_id,
         prepared.instrumental,
+        prepared.has_word_sync,
         &Some("lrclib".to_owned()),
         &mut tx,
     )?;
@@ -108,6 +109,7 @@ fn prepare_lyrics(payload: &PublishRequest) -> Result<PreparedLyrics> {
                     synced_lyrics: None,
                     lyricsfile,
                     instrumental: false,
+                    has_word_sync: false,
                 }
             }),
         );
@@ -162,7 +164,7 @@ mod tests {
 
         let row = connection
             .query_row(
-                "SELECT plain_lyrics, synced_lyrics, lyricsfile, instrumental, has_lyricsfile FROM lyrics",
+                "SELECT plain_lyrics, synced_lyrics, lyricsfile, instrumental, has_lyricsfile, has_word_sync FROM lyrics",
                 [],
                 |row| {
                     Ok((
@@ -171,6 +173,7 @@ mod tests {
                         row.get::<_, String>(2)?,
                         row.get::<_, bool>(3)?,
                         row.get::<_, bool>(4)?,
+                        row.get::<_, bool>(5)?,
                     ))
                 },
             )
@@ -180,6 +183,7 @@ mod tests {
         assert_eq!(row.1, payload.synced_lyrics);
         assert!(!row.3);
         assert!(row.4);
+        assert!(!row.5);
 
         let parsed = parse_lyricsfile(&row.2).unwrap();
         assert_eq!(parsed.plain_lyrics.as_deref(), Some("Second\nFirst"));
@@ -208,7 +212,7 @@ mod tests {
 
         let row = connection
             .query_row(
-                "SELECT plain_lyrics, synced_lyrics, lyricsfile, instrumental, has_lyricsfile FROM lyrics",
+                "SELECT plain_lyrics, synced_lyrics, lyricsfile, instrumental, has_lyricsfile, has_word_sync FROM lyrics",
                 [],
                 |row| {
                     Ok((
@@ -217,6 +221,7 @@ mod tests {
                         row.get::<_, String>(2)?,
                         row.get::<_, bool>(3)?,
                         row.get::<_, bool>(4)?,
+                        row.get::<_, bool>(5)?,
                     ))
                 },
             )
@@ -227,5 +232,31 @@ mod tests {
         assert_eq!(row.2, lyricsfile);
         assert!(row.3);
         assert!(row.4);
+        assert!(!row.5);
+    }
+
+    #[test]
+    fn word_synced_lyricsfile_sets_has_word_sync() {
+        let mut connection = connection();
+        let mut payload = payload();
+        let lyricsfile = "version: '1.0'\nmetadata:\n  title: Test Song\n  artist: Test Artist\n  instrumental: false\nlines:\n  - text: Hello world\n    start_ms: 1000\n    words:\n      - text: 'Hello '\n        start_ms: 1000\n      - text: world\n        start_ms: 1500\nplain: |\n  Hello world\n";
+        payload.lyricsfile = Some(lyricsfile.to_owned());
+
+        publish_lyrics(&payload, &mut connection).unwrap();
+
+        let (stored, has_word_sync): (String, bool) = connection
+            .query_row("SELECT lyricsfile, has_word_sync FROM lyrics", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(stored, lyricsfile);
+        assert!(has_word_sync);
+
+        let parsed = parse_lyricsfile(&stored).unwrap();
+        assert!(parsed.has_word_sync);
+        assert_eq!(
+            parsed.synced_lyrics.as_deref(),
+            Some("[00:01.00]Hello world")
+        );
     }
 }
