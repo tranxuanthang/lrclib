@@ -1,0 +1,373 @@
+openapi: 3.1.0
+info:
+  title: LRCLIB
+  description: |
+    Welcome to the beta API documentation and specification of the LRCLIB's API! Although we intend to maintain backward compatibility, please be aware that there may be breaking changes in future updates. Since this document is still in its early stages, it may lack information or contain inaccuracies in certain sections.
+
+    This API has no rate limiting in place and is openly accessible to all users and applications. There is no need for an API key or any kind of registering!
+
+    While this is not mandatory, if you are developing an application to interact with LRCLIB, we encourage you to include the User-Agent header in your requests, specifying your application's name, version, and a link to its homepage or project page. For example: [LRCGET v0.2.0](https://github.com/tranxuanthang/lrcget).
+  version: 1.0.0
+  license:
+    name: MIT
+    url: https://github.com/tranxuanthang/lrcget/blob/main/LICENSE
+
+servers:
+  - url: https://lrclib.net
+    description: Production server
+  - url: http://127.0.0.1:3000
+    description: Local Server
+
+paths:
+  /api/get:
+    get:
+      summary: Get lyrics with a track's signature
+      description: |
+        Attempt to find the best match of lyrics for the track. You must provide the exact signature of the track, including the track title, artist name, album name, and the track's duration in seconds.
+
+        Each time you request a new track's signature, this API will attempt to access external sources in case the lyrics are not found in the internal database. Therefore, the response time will vary significantly. If you prefer to avoid this behavior, please use the /api/get-cached API instead.
+
+        Note: The provided duration is crucial. LRCLIB will attempt to provide the lyrics only when the duration matches the record in LRCLIB's database, or at least with a difference of ±2 seconds in duration.
+      operationId: getLyrics
+      parameters:
+        - $ref: '#/components/parameters/UserAgent'
+        - $ref: '#/components/parameters/TrackName'
+        - $ref: '#/components/parameters/ArtistName'
+        - $ref: '#/components/parameters/AlbumName'
+        - $ref: '#/components/parameters/Duration'
+      responses:
+        '200':
+          $ref: '#/components/responses/Record'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/get/{id}:
+    get:
+      summary: Get lyrics by LRCLIB's ID
+      description: Get a lyrics record by an absolute ID. ID of a lyrics record can be retrieved from other APIs, such as /api/search API.
+      operationId: getLyricsByID
+      parameters:
+        - $ref: '#/components/parameters/UserAgent'
+        - $ref: '#/components/parameters/LyricID'
+      responses:
+        '200':
+          $ref: '#/components/responses/Record'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/search:
+    get:
+      summary: Search for lyrics records
+      description: |
+        Search for lyrics records using keywords. This API returns an array of lyrics records that match the specified search condition(s).
+
+        At least ONE of the two parameters, q OR track_name, must be present.
+
+        Note: This API currently returns a maximum of 20 results and does not support pagination. These limitations are subject to change in the future.
+      operationId: searchLyrics
+      parameters:
+        - $ref: '#/components/parameters/UserAgent'
+        - $ref: '#/components/parameters/SearchTrackName'
+        - $ref: '#/components/parameters/SearchArtistName'
+        - $ref: '#/components/parameters/SearchAlbumName'
+        - $ref: '#/components/parameters/SearchFuzzy'
+      responses:
+        '200':
+          $ref: '#/components/responses/Records'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/request-challenge:
+    post:
+      summary: Request a challenge
+      description: |
+        Note: This API is experimental and subject to potential changes in the future.
+
+        Generate a pair of prefix and target strings for the cryptographic challenge. Each challenge has an expiration time of 5 minutes.
+
+        The challenge's solution is a nonce, which can be used to create a Publish Token for submitting lyrics to LRCLIB.
+      operationId: requestChallenge
+      parameters:
+        - $ref: '#/components/parameters/UserAgent'
+      responses:
+        '200':
+          $ref: '#/components/responses/Challenge'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  
+  /api/publish:
+    post:
+      summary: Publish a new lyrics
+      description: |
+        Note: This API is experimental and subject to potential changes in the future.
+
+        Publish a new lyrics to LRCLIB database. This API can be called anonymously, and no registration is required.
+
+        If BOTH plain lyrics and synchronized lyrics are left empty, the track will be marked as instrumental.
+
+        All previous revisions of the lyrics will still be kept when publishing lyrics for a track that already has existing lyrics.
+
+        Obtaining the Publish Token
+
+        Every POST /api/publish request must include a fresh, valid Publish Token in the X-Publish-Token header. Each Publish Token can only be used once.
+
+        The Publish Token consists of two parts: a prefix and a nonce concatenated with a colon ({prefix}:{nonce}).
+
+        To obtain a prefix, you need to make a request to the POST /api/request-challenge API. This will provide you with a fresh prefix string and a target string.
+
+        To find a valid nonce, you must solve a proof-of-work cryptographic challenge using the provided prefix and target. For implementation examples, please refer to [the source code of LRCGET](https://github.com/tranxuanthang/lrcget/blob/main/src-tauri/src/lrclib/challenge_solver.rs).
+      operationId: publishLyrics
+      parameters:
+        - $ref: '#/components/parameters/UserAgent'
+        - $ref: '#/components/parameters/PublishHeader'
+      requestBody:
+        $ref: '#/components/requestBodies/CreateRecord'
+      responses:
+        '201':
+          description: Created
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+components:
+  schemas:
+    Record:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique identifier of the track
+        trackName:
+          type: string
+          description: Name of the track
+        artistName:
+          type: string
+          description: Name of the artist
+        albumName:
+          type: string
+          description: Name of the album
+        instrumental:
+          type: boolean
+          description: Track is instrumental, has no lyrics
+        plainLyrics:
+          type: string
+          description: Lyrics without timecodes
+        syncedLyrics:
+          type: string
+          description: Lyrics with timecodes
+      required:
+        - id
+        - trackName
+        - artistName
+        - albumName
+        - instrumental
+    
+    CreateRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique identifier of the track
+        trackName:
+          type: string
+          description: Name of the track
+        artistName:
+          type: string
+          description: Name of the artist
+        albumName:
+          type: string
+          description: Name of the album
+        instrumental:
+          type: boolean
+          description: Track is instrumental, has no lyrics
+        plainLyrics:
+          type: string
+          description: Lyrics without timecodes
+        syncedLyrics:
+          type: string
+          description: Lyrics with timecodes
+      required:
+        - id
+        - trackName
+        - artistName
+        - albumName
+        - instrumental
+        - plainLyrics
+        - syncedLyrics
+
+    Error:
+      type: object
+      required:
+        - statusCode
+        - message
+        - name
+      properties:
+        statusCode:
+          type: integer
+          description: Error code
+          example: 404
+        message:
+          type: string
+          description: Error message
+          example: Failed to find specified track
+        name:
+          type: string
+          description: Additional error details
+          example: TrackNotFound
+
+    Challenge:
+      type: object
+      required:
+      - prefix
+      - target
+      properties:
+        prefix:
+          type: string
+        target:
+          type: string
+
+  responses:
+    Record:
+      description: Lyric information about a track
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Record'
+
+    Records:
+      description: Array of the lyrics records
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Record'
+
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: Track not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    Challenge:
+      description: The challenge to publish lyrics
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Challenge'
+
+  parameters:
+    UserAgent:
+      name: User-Agent
+      in: header
+      description: |
+        Optional User-Agent header identifying your application.
+        Recommended format: "AppName vX.Y.Z (link-to-homepage)"
+        Example: "LRCGET v0.2.0 (https://github.com/tranxuanthang/lrcget)"
+      required: false
+      schema:
+        type: string
+        example: "MyLyricsApp v1.0.0 (https://example.com/myapp)"
+
+    TrackName:
+      name: track_name
+      in: query
+      description: Title of the track
+      required: true
+      schema:
+        type: string
+    
+    ArtistName:
+      name: artist_name
+      in: query
+      description: Name of the artist
+      required: true
+      schema:
+        type: string
+
+    AlbumName:
+      name: album_name
+      in: query
+      description: Name of the album
+      required: true
+      schema:
+        type: string
+
+    Duration:
+      name: duration
+      in: query
+      description: Track's duration in seconds
+      required: true
+      schema:
+        type: integer
+    
+    LyricID:
+      name: id
+      in: path
+      description: ID of the Lyrics record
+      required: true
+      schema:
+        type: integer
+
+    SearchTrackName:
+      name: track_name
+      in: query
+      description: Search for keyword in track's title
+      required: false
+      schema:
+        type: string
+    
+    SearchArtistName:
+      name: artist_name
+      in: query
+      description: Search for keyword in track's artist name
+      required: false
+      schema:
+        type: string
+
+    SearchAlbumName:
+      name: album_name
+      in: query
+      description: Search for keyword in track's album name
+      required: false
+      schema:
+        type: string
+    
+    SearchFuzzy:
+      name: q
+      in: query
+      description: Search for keyword present in ANY fields (track's title, artist name or album name)
+      required: false
+      schema:
+        type: string
+    
+    PublishHeader:
+      name: X-Publish-Token
+      in: header
+      description: A Publish Token that can be retrieved via solving a cryptographic challenge
+      required: true
+      schema:
+        type: string
+
+  requestBodies:
+    CreateRecord:
+      description: Create a lyrics records
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CreateRecord'
+    
+security:
+  - {}
+
+
+externalDocs:
+  description: Find more information here
+  url: https://lrclib.net/docs
