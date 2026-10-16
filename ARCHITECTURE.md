@@ -63,7 +63,7 @@ Background tasks:
 - `challenge_cache`: proof-of-work publish challenges, TTL 5 min.
 - `get_metadata_cache`: `Cache<String, Option<TrackResponse>>` with 24h TTL / 4h idle; stores both hits and misses. Uses `try_get_with` for coalescing concurrent requests.
 - `search_cache`: cached `/api/search` responses, 24h TTL, 4h idle timeout.
-- `load_permits` / `load_queue_timeout`: bounded admission for blocking-load tasks; configurable via `LRCLIB_MAX_CONCURRENT_LOADS` (default 32) and `LRCLIB_LOAD_QUEUE_MS` (default 250). `GET /api/search` and `GET /api/get` return `503 + Retry-After: 1` when the load budget is exhausted.
+- `load_permits` / `load_queue_timeout`: bounded admission for blocking-load tasks; configurable via `LRCLIB_MAX_CONCURRENT_LOADS` (default 32) and `LRCLIB_LOAD_QUEUE_MS` (default 250). `GET /api/search`, `GET /api/get`, and `GET /api/get/:track_id` return `503 + Retry-After: 1` when the load budget is exhausted.
 
 - Moka caches use AHash for lower-overhead in-memory key hashing.
 - `http_metrics`: aggregate HTTP metrics plus `/api/search` and metadata `/api/get` request, cache hit/miss, failure, route-latency, and backend-stage histograms; the reporter snapshots and resets these once per minute.
@@ -177,7 +177,7 @@ Important DB behavior:
 - track uniqueness is enforced on normalized `(name_lower, artist_name_lower, album_name_lower, duration)`.
 - the uniqueness constraint's autoindex covers full metadata lookups; `idx_tracks_metadata_no_album` separately supports metadata lookups that omit the album but include duration.
 - DB opens in WAL mode with tuned PRAGMAs in `server/src/db.rs`; connection-local PRAGMAs and a busy timeout are applied to every pooled connection. Startup logs the linked SQLite version plus the effective and compiled maximum mmap sizes, with all SQLite compile options available at debug level. `LRCLIB_MMAP_SIZE` and `LRCLIB_CACHE_SIZE` override the mmap and suggested page-cache limits, while `LRCLIB_POOL_MAX_SIZE` sets the r2d2 connection limit (default 16).
-- `LRCLIB_MAX_CONCURRENT_LOADS` (default 32) and `LRCLIB_LOAD_QUEUE_MS` (default 250) control the blocking-load admission. `LRCLIB_MAX_BLOCKING_THREADS` optionally caps the tokio blocking thread pool (only when explicitly set; default follows tokio). When permitted loads are exhausted, `/api/get` and `/api/search` return `503 + Retry-After: 1`.
+- `LRCLIB_MAX_CONCURRENT_LOADS` (default 32) and `LRCLIB_LOAD_QUEUE_MS` (default 250) control the blocking-load admission. `LRCLIB_MAX_BLOCKING_THREADS` optionally caps the tokio blocking thread pool (only when explicitly set; default follows tokio). When permitted loads are exhausted, `/api/get`, `/api/get/:track_id`, and `/api/search` return `503 + Retry-After: 1`.
 - `idx_lyrics_has_lyricsfile` supports efficient counts and filters over Lyricsfile adoption.
 - `idx_lyrics_has_word_sync` is a partial index over `has_word_sync = TRUE`; it stays small because word-synced rows are the exception.
 
