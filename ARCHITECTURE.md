@@ -24,7 +24,7 @@ This is the public self-hosted product.
 - `server/src/metrics.rs`: bounded in-memory aggregate and route-specific latency histograms and interval counters.
 - `server/src/state.rs`: `AppState` and construction of shared caches and resources.
 - `server/src/router.rs`: Axum route registration, request tracing, metrics middleware, and CORS.
-- `server/src/background.rs`: request metrics and recent lyrics counter tasks.
+- `server/src/background.rs`: request metrics, recent lyrics counter, and daily PRAGMA optimize tasks.
 - `server/src/routes/*.rs`: HTTP handlers.
 - `server/src/repositories/*.rs`: SQL access layer.
 - `server/src/entities/*.rs`: small DB/domain structs.
@@ -51,7 +51,8 @@ Server startup in `server::serve`, implemented in `server/src/bootstrap.rs`:
 Background tasks:
 
 - request metrics reporter: once per minute logs aggregate HTTP metrics plus `/api/search` and `/api/get` request, cache, failure, and latency metrics
-- recent lyrics counter: refreshes `last 10 minutes` publish count once/minute
+- recent lyrics counter: refreshes `last 10 minutes` publish count once/minute in `spawn_blocking`, so the indexed count query does not run on an async worker
+- daily `PRAGMA optimize`: waits 24h after startup (the startup `PRAGMA optimize=0x10002` already runs during `init_db`), then runs `PRAGMA optimize` once/day with `analysis_limit = 400` inside `spawn_blocking`, so maintenance does not block the async runtime or scan entire indexes on large databases
 - search indexer: dedicated OS thread that tails the `tracks` table into the Tantivy index (see Search Index)
 
 ## AppState

@@ -80,38 +80,101 @@ pub(crate) fn spawn_lyrics_counter(state: Arc<AppState>) {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
-            let mut conn = match state.pool.get() {
-                Ok(conn) => conn,
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to get DB connection for lyrics counter");
-                    continue;
+            let pool = state.pool.clone();
+            let result = tokio::task::spawn_blocking(move || -> anyhow::Result<i64> {
+                let mut conn = pool.get()?;
+                get_last_10_mins_lyrics_count(&mut conn)
+            })
+            .await;
+
+            match result {
+                Ok(Ok(count)) => {
+                    state
+                        .recent_lyrics_count
+                        .store(count as usize, Ordering::Relaxed);
                 }
-            };
-            let count = match get_last_10_mins_lyrics_count(&mut conn) {
-                Ok(count) => count,
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to query lyrics count");
-                    continue;
-                }
-            };
-            state
-                .recent_lyrics_count
-                .store(count as usize, Ordering::Relaxed);
+                Ok(Err(e)) => tracing::warn!(error = %e, "Failed to query lyrics count"),
+                Err(e) => tracing::warn!(error = %e, "Lyrics counter task failed"),
+            }
         }
     });
 }
 
+const OPTIMIZE_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
+const OPTIMIZE_ANALYSIS_LIMIT: i64 = 400;
+
 /// Spawns a background task that runs PRAGMA optimize once a day.
 pub(crate) fn spawn_optimize_pragma(state: Arc<AppState>) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60 * 60 * 24));
+        // `init_db` already runs `PRAGMA optimize=0x10002` before the server
+        // starts listening, so the first periodic pass waits a full day.
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + OPTIMIZE_INTERVAL,
+            OPTIMIZE_INTERVAL,
+        );
         loop {
             interval.tick().await;
-            if let Ok(conn) = state.pool.get() {
-                if let Err(e) = conn.execute_batch("PRAGMA optimize;") {
-                    tracing::warn!(error = %e, "PRAGMA optimize failed");
-                }
+            let pool = state.pool.clone();
+            let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Duration> {
+                let started = std::time::Instant::now();
+                let conn = pool.get()?;
+                optimize_pragma(&conn)?;
+                Ok(started.elapsed())
+            })
+            .await;
+
+            match result {
+                Ok(Ok(elapsed)) => tracing::info!(
+                    event = "optimize_pragma",
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "PRAGMA optimize completed"
+                ),
+                Ok(Err(e)) => tracing::warn!(error = %e, "PRAGMA optimize failed"),
+                Err(e) => tracing::warn!(error = %e, "PRAGMA optimize task failed"),
             }
         }
     });
+}
+
+fn optimize_pragma(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    // Bound the work per index so the daily pass stays short on large databases.
+    conn.pragma_update(None, "analysis_limit", OPTIMIZE_ANALYSIS_LIMIT)?;
+    conn.execute_batch("PRAGMA optimize;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn optimize_pragma_bounds_analysis_work() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE optimize_test (id INTEGER PRIMARY KEY, value TEXT);
+             CREATE INDEX optimize_test_value ON optimize_test(value);
+             INSERT INTO optimize_test (value) VALUES ('a'), ('b'), ('c');",
+        )
+        .unwrap();
+        // SQLite 3.45 only re-analyzes tables whose statistics were used by
+        // the query planner on this connection.
+        conn.query_row(
+            "SELECT id FROM optimize_test INDEXED BY optimize_test_value WHERE value = 'a'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+
+        optimize_pragma(&conn).unwrap();
+
+        let analysis_limit: i64 = conn
+            .query_row("PRAGMA analysis_limit", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(analysis_limit, OPTIMIZE_ANALYSIS_LIMIT);
+
+        let statistics: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_stat1", [], |row| row.get(0))
+            .unwrap();
+        assert!(statistics > 0);
+    }
 }
