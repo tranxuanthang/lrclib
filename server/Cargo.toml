@@ -1,40 +1,34 @@
 [package]
-name = "server"
+name = "lrclib-server"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+lrclib-core = { path = "../core" }
 tokio = { version = "1.37.0", features = ["full"] }
 axum = { version = "0.7.5", features = ["tracing"] }
 axum-macros = "0.4.1"
 tower-http = { version = "0.5.0", features = ["trace", "cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-r2d2 = "0.8.10"
-r2d2_sqlite = "0.24.0"
-rusqlite = { version = "0.31.0", features = ["bundled", "chrono"] }
-rusqlite_migration = { version = "1.2.0", features = ["from-directory"] }
+r2d2.workspace = true
+r2d2_sqlite.workspace = true
+rusqlite.workspace = true
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.115"
 serde_yaml = "0.9.34"
 anyhow = "1.0.82"
-include_dir = "0.7.3"
-lazy_static = "1.4.0"
-chrono = { version = "0.4.38", features = ["serde"] }
-indoc = "2"
-secular = { version="1.0.1", features=["bmp", "normalization"] }
-regex = "1.10.4"
-aho-corasick = "1.1.4"
+chrono.workspace = true
 rand = "0.8.5"
 moka = { version = "0.12.8", features = ["future"] }
 ahash = "0.8"
 sha2 = "0.10.8"
 hex = "0.4.3"
 hdrhistogram = "7.5"
-collapse = "0.1.2"
-reqwest = { version = "0.12.4", features = ["json", "cookies", "rustls-tls", "charset", "http2"], default-features = false }
 uuid = { version = "1.8.0", features = ["v4"] }
 validator = { version = "0.18.1", features = ["derive"] }
 num-bigint = "0.4.6"
-dashmap = "6.1.0"
 tantivy = "0.26"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

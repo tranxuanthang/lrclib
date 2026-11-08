@@ -3,7 +3,7 @@ use crate::{
         lyrics::SimpleLyrics,
         track::{SimpleTrack, TrackSearchDoc},
     },
-    utils::prepare_input,
+    text::prepare_input,
 };
 use anyhow::Result;
 use chrono::prelude::*;

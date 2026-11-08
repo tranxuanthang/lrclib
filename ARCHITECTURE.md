@@ -5,13 +5,14 @@
 Rust workspace for the LRCLIB API server.
 
 - Root crate: thin CLI wrapper in `src/main.rs`.
-- Main app: `server/` crate.
+- Persistence/domain: `core/` crate (`lrclib-core`).
+- HTTP runtime: `server/` crate (`lrclib-server`).
 - Storage: SQLite via `rusqlite` + `r2d2`.
 - HTTP: Axum.
 
-Most real behavior lives in `server/`.
+Most behavior lives in `lrclib-core` and `lrclib-server`.
 
-This is the public self-hosted product.
+This is the public self-hosted product. The workspace intentionally does not include the hosted-only queue, gateway, rate-limit, or wiretap-client crates.
 
 ## Workspace Layout
 
@@ -19,24 +20,27 @@ This is the public self-hosted product.
 - `src/backfill_lock.rs`: shared exclusive process lock keyed by database identity, used by the maintenance backfills.
 - `src/backfill_lyricsfiles.rs`: resumable Lyricsfile backfill orchestration, throttling, and dry-run reporting.
 - `src/backfill_word_sync.rs`: idempotent word-sync backfill sweep with `instr` prefiltering, dry-run sampling, progress reporting, and row limits.
-- `server/src/lib.rs`: thin crate facade that declares modules and re-exports the public server API.
+- `core/src/lib.rs`: thin crate facade that declares the persistence/domain modules.
+- `core/src/db.rs`: SQLite pool setup, WAL/PRAGMAs, and embedded migrations.
+- `core/src/repositories/*.rs`: SQL access layer.
+- `core/src/entities/*.rs`: small DB/domain structs.
+- `core/src/lyricsfile.rs`: shared Lyricsfile parsing, legacy LRC conversion, YAML generation, and metadata retargeting used by the publish path.
+- `core/src/text.rs`: track/search input normalization shared by repositories and routes.
+- `core/migrations/*`: embedded SQLite schema/migrations, applied on startup.
+- `server/src/lib.rs`: thin crate facade that declares the HTTP/runtime modules and re-exports the public server API.
 - `server/src/bootstrap.rs`: server startup, listener lifecycle, graceful shutdown, and runtime composition.
 - `server/src/metrics.rs`: bounded in-memory aggregate and route-specific latency histograms and interval counters.
 - `server/src/state.rs`: `AppState` and construction of shared caches and resources.
 - `server/src/router.rs`: Axum route registration, request tracing, metrics middleware, and CORS.
 - `server/src/background.rs`: request metrics, recent lyrics counter, and daily PRAGMA optimize tasks.
 - `server/src/routes/*.rs`: HTTP handlers.
-- `server/src/repositories/*.rs`: SQL access layer.
-- `server/src/entities/*.rs`: small DB/domain structs.
-- `server/src/lyricsfile.rs`: shared Lyricsfile parsing, legacy LRC conversion, YAML generation, and metadata retargeting used by the publish path.
 - `server/src/search_index.rs` + `server/src/search_index/*.rs`: embedded Tantivy search index over track metadata (schema, query building, polling indexer).
-- `server/src/utils.rs`: input normalization, publish-token verification, cache helpers.
-- `server/migrations/*`: embedded SQLite schema/migrations, applied on startup.
+- `server/src/utils.rs`: publish-token verification and cache helpers; input normalization is re-exported from `lrclib_core::text`.
 - `TANTIVY_SEARCH_PLAN.md`: implementation and rollout record for replacing the `/api/search` FTS5 query path with an embedded Tantivy index.
 
 ## Runtime Flow
 
-Server startup in `server::serve`, implemented in `server/src/bootstrap.rs`:
+Server startup in `lrclib_server::serve`, implemented in `server/src/bootstrap.rs`:
 
 - init tracing from `LRCLIB_LOG`
 - open SQLite pool
@@ -80,7 +84,7 @@ There is no separate service layer.
 - repositories contain SQL and row mapping
 
 If you need API behavior changes, start in `routes/`.
-If you need query/schema changes, start in `repositories/` and `migrations/`.
+If you need query/schema changes, start in `core/src/repositories/` and `core/migrations/`.
 
 ## API Surface
 
@@ -163,7 +167,7 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 
 ## Data Model
 
-Core schema is in `server/migrations/`.
+Core schema is in `core/migrations/`.
 
 - `tracks`: canonical track metadata plus normalized `*_lower` columns and `last_lyrics_id`.
 - `lyrics`: lyrics versions linked to a track; latest version is selected through `tracks.last_lyrics_id`. It also stores raw `lyricsfile` YAML plus `has_lyricsfile` for efficient presence/count queries. The column remains nullable for historical rows, but current repository writes require it. `has_word_sync` marks versions whose stored Lyricsfile contains at least one non-empty `lines[].words` array; it is `NOT NULL DEFAULT FALSE` and maintained by the write paths and the word-sync backfill.
@@ -177,7 +181,7 @@ Important DB behavior:
 - FTS rows are maintained by insert/update/delete triggers on `tracks`.
 - track uniqueness is enforced on normalized `(name_lower, artist_name_lower, album_name_lower, duration)`.
 - the uniqueness constraint's autoindex covers full metadata lookups; `idx_tracks_metadata_no_album` separately supports metadata lookups that omit the album but include duration.
-- DB opens in WAL mode with tuned PRAGMAs in `server/src/db.rs`; connection-local PRAGMAs and a busy timeout are applied to every pooled connection. Startup logs the linked SQLite version plus the effective and compiled maximum mmap sizes, with all SQLite compile options available at debug level. `LRCLIB_MMAP_SIZE` and `LRCLIB_CACHE_SIZE` override the mmap and suggested page-cache limits, while `LRCLIB_POOL_MAX_SIZE` sets the r2d2 connection limit (default 16).
+- DB opens in WAL mode with tuned PRAGMAs in `core/src/db.rs`; connection-local PRAGMAs and a busy timeout are applied to every pooled connection. Startup logs the linked SQLite version plus the effective and compiled maximum mmap sizes, with all SQLite compile options available at debug level. `LRCLIB_MMAP_SIZE` and `LRCLIB_CACHE_SIZE` override the mmap and suggested page-cache limits, while `LRCLIB_POOL_MAX_SIZE` sets the r2d2 connection limit (default 16).
 - `LRCLIB_MAX_CONCURRENT_LOADS` (default 32) and `LRCLIB_LOAD_QUEUE_MS` (default 250) control the blocking-load admission. `LRCLIB_MAX_BLOCKING_THREADS` optionally caps the tokio blocking thread pool (only when explicitly set; default follows tokio). When permitted loads are exhausted, `/api/get`, `/api/get/:track_id`, and `/api/search` return `503 + Retry-After: 1`.
 - `idx_lyrics_has_lyricsfile` supports efficient counts and filters over Lyricsfile adoption.
 - `idx_lyrics_has_word_sync` is a partial index over `has_word_sync = TRUE`; it stays small because word-synced rows are the exception.

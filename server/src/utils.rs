@@ -1,30 +1,8 @@
 use ahash::RandomState as AHashRandomState;
-use aho_corasick::AhoCorasick;
-use collapse::collapse;
-use lazy_static::lazy_static;
 use moka::future::Cache;
-use secular::lower_lay_string;
 use sha2::{Digest, Sha256};
 
-lazy_static! {
-    static ref PATTERNS_TO_SPACE: Vec<&'static str> = vec![
-        "`", "~", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "|", "+", "-", "=", "?",
-        ";", ":", "\"", ",", ".", "<", ">", "{", "}", "[", "]", "\\", "/", "\x00", "\n",
-    ];
-    static ref SPACE_REPLACEMENTS: Vec<&'static str> = vec![" "; PATTERNS_TO_SPACE.len()];
-    static ref TO_SPACE: AhoCorasick = AhoCorasick::new(PATTERNS_TO_SPACE.iter()).unwrap();
-    static ref PATTERNS_TO_REMOVE: Vec<&'static str> = vec!["'", "\u{2019}"];
-    static ref EMPTY_REPLACEMENTS: Vec<&'static str> = vec!["", ""];
-    static ref TO_REMOVE: AhoCorasick = AhoCorasick::new(PATTERNS_TO_REMOVE.iter()).unwrap();
-}
-
-pub fn prepare_input(input: &str) -> String {
-    let prepared_input = lower_lay_string(&input);
-    let prepared_input = TO_SPACE.replace_all(&prepared_input, &SPACE_REPLACEMENTS);
-    let prepared_input = TO_REMOVE.replace_all(&prepared_input, &EMPTY_REPLACEMENTS);
-    let prepared_input = prepared_input.to_lowercase();
-    collapse(&prepared_input)
-}
+pub(crate) use lrclib_core::text::process_param;
 
 // tokens
 
@@ -85,12 +63,3 @@ pub fn verify_answer(prefix: &str, target: &str, nonce: &str) -> bool {
 
     true
 }
-
-pub fn process_param(param: Option<&str>) -> Option<String> {
-    param
-        .as_ref()
-        .map(|s| prepare_input(s))
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| s.to_owned())
-}
-

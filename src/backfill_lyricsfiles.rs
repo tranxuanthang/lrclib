@@ -1,6 +1,6 @@
 use crate::backfill_lock::BackfillLock;
 use anyhow::{ensure, Context, Result};
-use server::{
+use lrclib_core::{
     entities::lyrics::{LyricsfileBackfillCandidate, LyricsfileBackfillUpdate},
     lyricsfile::{
         lyricsfile_has_word_sync, prepare_legacy_lyrics_preserving_instrumental,
@@ -58,7 +58,7 @@ pub async fn run(options: BackfillOptions) -> Result<BackfillSummary> {
     let started = Instant::now();
 
     if options.dry_run {
-        let mut conn = server::db::open_db_read_only(&database)
+        let mut conn = lrclib_core::db::open_db_read_only(&database)
             .with_context(|| format!("failed to open database {} read-only", database.display()))?;
         let initial_candidates =
             lyrics_repository::count_lyricsfile_backfill_candidates(&mut conn).context(
@@ -109,7 +109,7 @@ pub async fn run(options: BackfillOptions) -> Result<BackfillSummary> {
         ".lyricsfile-backfill.lock",
         "Lyricsfile backfill",
     )?;
-    let pool = server::db::init_db(&database)
+    let pool = lrclib_core::db::init_db(&database)
         .with_context(|| format!("failed to open database {}", database.display()))?;
     let mut conn = pool.get()?;
     let initial_candidates = lyrics_repository::count_lyricsfile_backfill_candidates(&mut conn)?;
@@ -295,7 +295,7 @@ fn print_summary(summary: &BackfillSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use server::repositories::track_repository;
+    use lrclib_core::repositories::track_repository;
     use std::{
         path::Path,
         time::{SystemTime, UNIX_EPOCH},
@@ -338,7 +338,7 @@ mod tests {
     #[tokio::test]
     async fn dry_run_limit_and_resume_work_end_to_end() {
         let database = test_database_path();
-        let pool = server::db::init_db(&database).unwrap();
+        let pool = lrclib_core::db::init_db(&database).unwrap();
         {
             let mut connection = pool.get().unwrap();
             let mut insert_historical_row = |title: &str, lyricsfile: Option<&str>| {

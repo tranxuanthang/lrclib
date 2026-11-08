@@ -1,0 +1,25 @@
+[package]
+name = "lrclib-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.82"
+aho-corasick = "1.1.4"
+chrono.workspace = true
+collapse = "0.1.2"
+include_dir = "0.7.3"
+indoc = "2"
+lazy_static = "1.4.0"
+r2d2.workspace = true
+r2d2_sqlite.workspace = true
+regex = "1.10.4"
+rusqlite.workspace = true
+rusqlite_migration = { version = "1.2.0", features = ["from-directory"] }
+secular = { version = "1.0.1", features = ["bmp", "normalization"] }
+serde = { version = "1.0.197", features = ["derive"] }
+serde_yaml = "0.9.34"
+tracing = "0.1"
+
+[dev-dependencies]
+uuid = { version = "1.8.0", features = ["v4"] }

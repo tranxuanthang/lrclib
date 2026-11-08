@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use server::serve;
+use lrclib_server::serve;
 use std::path::PathBuf;
 
 mod backfill_lock;

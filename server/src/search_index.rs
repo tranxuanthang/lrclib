@@ -26,7 +26,7 @@ const INDEX_FORMAT_VERSION: u32 = 1;
 const VERSION_FILE_NAME: &str = "lrclib_index_version";
 
 /// Values indexed by this tokenizer are already normalized by
-/// `utils::prepare_input` (lowercased, punctuation stripped, diacritics
+/// `lrclib_core::text::prepare_input` (lowercased, punctuation stripped, diacritics
 /// removed), so a plain split-on-non-alphanumeric plus lowercase safety net is
 /// sufficient for the search index.
 const TOKENIZER_NAME: &str = "lrclib_normalized";
@@ -125,7 +125,7 @@ impl SearchIndex {
 
     /// Returns the top ranked track ids for the given normalized search
     /// parameters. Inputs are expected to be pre-processed by
-    /// `utils::prepare_input`.
+    /// `lrclib_core::text::prepare_input`.
     pub fn search(
         &self,
         q: Option<&str>,

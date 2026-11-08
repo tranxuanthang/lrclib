@@ -1,6 +1,6 @@
 use crate::backfill_lock::BackfillLock;
 use anyhow::{ensure, Context, Result};
-use server::{
+use lrclib_core::{
     entities::lyrics::WordSyncBackfillCandidate, lyricsfile::parse_lyricsfile,
     repositories::lyrics_repository,
 };
@@ -60,7 +60,7 @@ pub async fn run(options: BackfillOptions) -> Result<BackfillSummary> {
     let started = Instant::now();
 
     if options.dry_run {
-        let mut conn = server::db::open_db_read_only(&database)
+        let mut conn = lrclib_core::db::open_db_read_only(&database)
             .with_context(|| format!("failed to open database {} read-only", database.display()))?;
         let sample_size = options
             .limit
@@ -91,7 +91,7 @@ pub async fn run(options: BackfillOptions) -> Result<BackfillSummary> {
     }
 
     let _lock = BackfillLock::acquire(&database, ".word-sync-backfill.lock", "word-sync backfill")?;
-    let pool = server::db::init_db(&database)
+    let pool = lrclib_core::db::init_db(&database)
         .with_context(|| format!("failed to open database {}", database.display()))?;
     let mut conn = pool.get()?;
 
@@ -236,7 +236,7 @@ fn print_summary(summary: &BackfillSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use server::repositories::track_repository;
+    use lrclib_core::repositories::track_repository;
     use std::{
         path::Path,
         time::{SystemTime, UNIX_EPOCH},
@@ -280,7 +280,7 @@ mod tests {
     #[tokio::test]
     async fn dry_run_and_backfill_mark_only_word_synced_rows() {
         let database = test_database_path();
-        let pool = server::db::init_db(&database).unwrap();
+        let pool = lrclib_core::db::init_db(&database).unwrap();
         {
             let mut connection = pool.get().unwrap();
             let mut insert_historical_row = |title: &str, lyricsfile: Option<&str>| {
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(completed.confirmed, 1);
         assert_eq!(completed.raced, 0);
 
-        let pool = server::db::init_db(&database).unwrap();
+        let pool = lrclib_core::db::init_db(&database).unwrap();
         let connection = pool.get().unwrap();
         let word_flag: bool = connection
             .query_row(

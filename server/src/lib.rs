@@ -1,14 +1,14 @@
+//! HTTP runtime for the LRCLIB API server.
+
 mod background;
 mod bootstrap;
 mod metrics;
 mod router;
 mod state;
 
-pub mod db;
-pub mod entities;
+pub(crate) use lrclib_core::{db, entities, lyricsfile, repositories};
+
 pub mod errors;
-pub mod lyricsfile;
-pub mod repositories;
 pub mod routes;
 pub mod search_index;
 pub mod utils;

@@ -5,9 +5,17 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
-server = { path = "./server" }
+lrclib-core = { path = "./core" }
+lrclib-server = { path = "./server" }
 clap = { version = "4.5.4", features = ["derive", "env"] }
 tokio = { version = "1.37.0", features = ["full"] }
 
 [workspace]
-members = ["server"]
+resolver = "2"
+members = ["core", "server"]
+
+[workspace.dependencies]
+chrono = { version = "0.4.38", features = ["serde"] }
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.24.0"
+rusqlite = { version = "0.31.0", features = ["bundled", "chrono"] }
