@@ -25,10 +25,10 @@ ahash = "0.8"
 sha2 = "0.10.8"
 hex = "0.4.3"
 hdrhistogram = "7.5"
-uuid = { version = "1.8.0", features = ["v4"] }
 validator = { version = "0.18.1", features = ["derive"] }
 num-bigint = "0.4.6"
 tantivy = "0.26"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+uuid = { version = "1.8.0", features = ["v4"] }
