@@ -53,7 +53,7 @@ pub async fn route(
 
     // Generate a cache key based on query parameters
     let cache_key = format!(
-        "search:v4:{}:{}:{}:{}",
+        "search:v5:{}:{}:{}:{}",
         q.as_deref().unwrap_or_default(),
         track_name.as_deref().unwrap_or_default(),
         artist_name.as_deref().unwrap_or_default(),
@@ -400,7 +400,7 @@ mod tests {
         assert!(test
             .state
             .search_cache
-            .get("search:v4:benchmark song:::")
+            .get("search:v5:benchmark song:::")
             .await
             .is_some());
 
@@ -530,7 +530,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tantivy_structured_search_requires_artist_phrase_in_the_artist() {
+    async fn tantivy_structured_search_requires_all_artist_tokens_in_the_artist() {
         let test = test_state_with_ready_search_index(|conn| {
             track_repository::add_one("Scoped Song", "Alpha Beta", "Collection", 180.0, conn)
                 .unwrap();
@@ -559,8 +559,81 @@ mod tests {
         .await
         .unwrap_or_else(|_| panic!("structured tantivy search failed"));
 
+        assert_eq!(response.0.len(), 2);
+        assert_eq!(response.0[0].id, 1);
+        assert_eq!(response.0[1].id, 3);
+
+        test.cleanup();
+    }
+
+    #[tokio::test]
+    async fn tantivy_structured_search_tolerates_reordered_artist_tokens() {
+        let test = test_state_with_ready_search_index(|conn| {
+            track_repository::add_one(
+                "Love The Way You Lie",
+                "Eminem, Rihanna",
+                "Recovery",
+                263.0,
+                conn,
+            )
+            .unwrap();
+        })
+        .await;
+
+        let response = route(
+            Query(QueryParams {
+                q: None,
+                track_name: Some("Love The Way You Lie".to_owned()),
+                artist_name: Some("Rihanna, Eminem".to_owned()),
+                album_name: None,
+            }),
+            State(test.state.clone()),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("structured tantivy search failed"));
+
         assert_eq!(response.0.len(), 1);
         assert_eq!(response.0[0].id, 1);
+        assert_eq!(
+            response.0[0].artist_name.as_deref(),
+            Some("Eminem, Rihanna")
+        );
+
+        test.cleanup();
+    }
+
+    #[tokio::test]
+    async fn tantivy_structured_search_ignores_infix_artist_connector() {
+        let test = test_state_with_ready_search_index(|conn| {
+            track_repository::add_one(
+                "Love The Way You Lie",
+                "Eminem, Rihanna",
+                "Recovery",
+                263.0,
+                conn,
+            )
+            .unwrap();
+        })
+        .await;
+
+        let response = route(
+            Query(QueryParams {
+                q: None,
+                track_name: Some("Love The Way You Lie".to_owned()),
+                artist_name: Some("Eminem feat. Rihanna".to_owned()),
+                album_name: None,
+            }),
+            State(test.state.clone()),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("structured tantivy search failed"));
+
+        assert_eq!(response.0.len(), 1);
+        assert_eq!(response.0[0].id, 1);
+        assert_eq!(
+            response.0[0].artist_name.as_deref(),
+            Some("Eminem, Rihanna")
+        );
 
         test.cleanup();
     }

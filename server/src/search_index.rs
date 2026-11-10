@@ -404,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_search_requires_artist_phrase_in_the_artist() {
+    fn structured_search_requires_all_artist_tokens_in_the_artist() {
         let dir = test_dir();
         let search_index = SearchIndex::open_or_create(&dir).unwrap();
         seed(
@@ -424,8 +424,352 @@ mod tests {
                 Some("alpha beta"),
                 None
             ),
+            vec![1, 3]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_matches_unordered_artist_tokens() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[doc(1, "love the way you lie", "eminem rihanna", "album")],
+        );
+
+        assert_eq!(
+            search(
+                &search_index,
+                None,
+                Some("love the way you lie"),
+                Some("rihanna eminem"),
+                None
+            ),
             vec![1]
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_ranks_exact_artist_order_first() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[
+                doc(1, "same song", "eminem rihanna", "album"),
+                doc(2, "same song", "rihanna eminem", "album"),
+            ],
+        );
+
+        assert_eq!(
+            search(
+                &search_index,
+                None,
+                Some("same song"),
+                Some("eminem rihanna"),
+                None
+            ),
+            vec![1, 2]
+        );
+        assert_eq!(
+            search(
+                &search_index,
+                None,
+                Some("same song"),
+                Some("rihanna eminem"),
+                None
+            ),
+            vec![2, 1]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_keeps_artist_tokens_in_the_artist_column() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[doc(1, "scoped song", "alpha", "beta collection")],
+        );
+
+        assert!(search(
+            &search_index,
+            None,
+            Some("scoped song"),
+            Some("alpha beta"),
+            None
+        )
+        .is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_keeps_title_and_album_as_phrases() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[doc(
+                1,
+                "love the way you lie",
+                "eminem rihanna",
+                "beta collection",
+            )],
+        );
+
+        // A missing title word is still a strict phrase failure.
+        assert!(search(
+            &search_index,
+            None,
+            Some("love way you lie"),
+            Some("eminem"),
+            None
+        )
+        .is_empty());
+        // Album order remains significant.
+        assert!(search(
+            &search_index,
+            None,
+            Some("love the way you lie"),
+            None,
+            Some("collection beta")
+        )
+        .is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_relaxes_infix_artist_connectors() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[doc(1, "love the way you lie", "eminem rihanna", "album")],
+        );
+
+        for artist in [
+            "eminem feat rihanna",
+            "eminem ft rihanna",
+            "eminem featuring rihanna",
+        ] {
+            assert_eq!(
+                search(
+                    &search_index,
+                    None,
+                    Some("love the way you lie"),
+                    Some(artist),
+                    None
+                ),
+                vec![1],
+                "connector variant {artist:?} should match the canonical credit"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_relaxes_infix_connector_with_reordered_artists() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[doc(1, "love the way you lie", "eminem rihanna", "album")],
+        );
+
+        assert_eq!(
+            search(
+                &search_index,
+                None,
+                Some("love the way you lie"),
+                Some("rihanna feat eminem"),
+                None
+            ),
+            vec![1]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_ranks_connector_order_above_reversed_artists() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[
+                doc(1, "love the way you lie", "eminem feat rihanna", "album"),
+                doc(2, "love the way you lie", "rihanna eminem", "album"),
+            ],
+        );
+
+        assert_eq!(
+            search(
+                &search_index,
+                None,
+                Some("love the way you lie"),
+                Some("eminem feat rihanna"),
+                None
+            ),
+            vec![1, 2]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_keeps_leading_connector_artist_tokens() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[
+                doc(1, "island song", "ft island", "album"),
+                doc(2, "island song", "island", "album"),
+            ],
+        );
+
+        // "ft" is leading, so it stays required and the unrelated "island"
+        // artist must not match.
+        assert_eq!(
+            search(
+                &search_index,
+                None,
+                Some("island song"),
+                Some("ft island"),
+                None
+            ),
+            vec![1]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_keeps_leading_connector_in_multi_artist_query() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[
+                doc(1, "collab song", "feat rihanna", "album"),
+                doc(2, "collab song", "eminem rihanna", "album"),
+            ],
+        );
+
+        // Dropping the leading "feat" would incorrectly match doc 2.
+        assert_eq!(
+            search(
+                &search_index,
+                None,
+                Some("collab song"),
+                Some("feat rihanna"),
+                None
+            ),
+            vec![1]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_keeps_standalone_connector_artist() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[
+                doc(1, "connector song", "feat", "album"),
+                doc(2, "connector song", "eminem rihanna", "album"),
+            ],
+        );
+
+        assert_eq!(
+            search(
+                &search_index,
+                None,
+                Some("connector song"),
+                Some("feat"),
+                None
+            ),
+            vec![1]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_does_not_relax_leading_or_trailing_connectors() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[doc(1, "love the way you lie", "eminem rihanna", "album")],
+        );
+
+        for artist in ["feat rihanna", "eminem feat"] {
+            assert!(
+                search(
+                    &search_index,
+                    None,
+                    Some("love the way you lie"),
+                    Some(artist),
+                    None
+                )
+                .is_empty(),
+                "edge connector {artist:?} must stay required"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_connector_does_not_drop_real_artist_tokens() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[doc(1, "love the way you lie", "eminem rihanna", "album")],
+        );
+
+        assert!(search(
+            &search_index,
+            None,
+            Some("love the way you lie"),
+            Some("eminem feat drake"),
+            None
+        )
+        .is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn structured_search_does_not_ignore_connectors_in_titles() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[doc(1, "love the way you lie", "eminem rihanna", "album")],
+        );
+
+        assert!(search(
+            &search_index,
+            None,
+            Some("love feat you lie"),
+            Some("eminem"),
+            None
+        )
+        .is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -442,6 +786,8 @@ mod tests {
             ],
         );
 
+        // Every artist token must appear in the artist column, but the exact
+        // order is a score boost rather than a requirement.
         assert_eq!(
             search(
                 &search_index,

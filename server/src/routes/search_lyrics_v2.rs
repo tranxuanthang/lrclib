@@ -104,13 +104,13 @@ fn build_cache_key(
     album_name: Option<&str>,
 ) -> String {
     match (q, track_name) {
-        (Some(q), _) => format!("search:v5:q:{q}"),
+        (Some(q), _) => format!("search:v6:q:{q}"),
         (None, Some(track_name)) => format!(
-            "search:v5:metadata:{track_name}:{}:{}",
+            "search:v6:metadata:{track_name}:{}:{}",
             artist_name.unwrap_or_default(),
             album_name.unwrap_or_default()
         ),
-        (None, None) => "search:v5:empty".to_owned(),
+        (None, None) => "search:v6:empty".to_owned(),
     }
 }
 

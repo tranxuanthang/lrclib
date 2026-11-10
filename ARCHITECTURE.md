@@ -115,7 +115,7 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 
 - Normalizes query params.
 - Uses `search_cache`.
-- Cache keys are versioned as `search:v4`.
+- Cache keys are versioned as `search:v5`.
 - On a cache miss, the Tantivy query and subsequent `track_repository::get_tracks_by_ids` SQLite join run in the same `spawn_blocking` task. The connection is acquired only after Tantivy returns nonempty ranked ids, and response order preserves the ranking.
 - If the index is unavailable, still catching up, or a Tantivy query fails, the search request fails; there is no FTS5 query fallback.
 - Concurrent misses for the same cache key are coalesced into one database load by Moka.
@@ -126,7 +126,7 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 ### `GET /api/v2/search`
 
 - Uses the same normalized query parameters and Tantivy ranking as `/api/search`.
-- Uses `search_v2_cache`; cache keys are versioned as `search:v5`.
+- Uses `search_v2_cache`; cache keys are versioned as `search:v6`.
 - On a cache miss, ranked ids are joined to track metadata and lyrics availability flags through `track_repository::get_track_summaries_by_ids`; lyrics text columns are never selected or serialized.
 - The response contains `id`, `trackName`, `artistName`, `albumName`, `duration`, `instrumental`, `hasWordSync`, `hasPlainLyrics`, `hasSyncedLyrics`, and `hasLyricsfile`.
 - Shares the `/api/search` load-admission budget and returns `503 Service Unavailable` with `Retry-After: 1` when saturated.
@@ -150,7 +150,7 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 - For `lyricsfile` publishes, `instrumental` is populated by a best-effort YAML read of `metadata.instrumental`; instrumental rows have no stored plain or synced text.
 - Repository insert functions require a non-empty Lyricsfile, so all current API write paths set `has_lyricsfile = true`.
 - `has_word_sync` comes from `PreparedLyrics`, so supplied Lyricsfiles are detected during the same parse used to derive legacy fields; legacy plain/synced publishes always store `false`.
-- Metadata cache entries for the published track expire naturally via TTL (24h); publish does not actively invalidate them. Response-shape changes must bump the `get:`/`search:` cache key versions instead.
+- Metadata cache entries for the published track expire naturally via TTL (24h); publish does not actively invalidate them. Response-shape or query-semantics changes must bump the `get:`/`search:` cache key versions instead.
 
 ### `POST /api/flag`
 
@@ -211,7 +211,7 @@ Current lyrics API responses remain backward-compatible:
 - The cursor (last indexed track id) is stored as the Tantivy commit payload, so it is atomic with each commit. Restarts replay `id > cursor`; crashes lose only uncommitted work that the replay re-indexes.
 - `SearchIndex::is_ready()` turns true once the indexer has caught up. Search requests fail until then; missing/corrupt/version-mismatched indexes rebuild in the background while non-search routes continue serving.
 - The index format version lives in `lrclib_index_version` inside the index dir; bump `INDEX_FORMAT_VERSION` when the schema/tokenizer changes to force a rebuild. Recreation refuses to wipe directories that do not look like a search index.
-- Query semantics: `q` = AND of terms across the three columns; structured params = per-column phrase queries. Inputs are expected to be normalized by `lrclib_core::text::prepare_input`.
+- Query semantics: `q` = AND of terms across the three columns. Structured `track_name` and `album_name` are per-column phrase queries; `artist_name` requires every token in the artist column in any order and boosts the exact phrase. Artist connector words (`feat`, `ft`, `featuring`) are optional only between other artist tokens; leading, trailing, and all-connector occurrences stay literal. Inputs are expected to be normalized by `lrclib_core::text::prepare_input`.
 - Tantivy emits its own `tracing` logs; use e.g. `LRCLIB_LOG=info,tantivy=warn` to quiet them.
 
 ## Matching Rules
