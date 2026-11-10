@@ -2,6 +2,9 @@ use clap::{Parser, Subcommand};
 use lrclib_server::serve;
 use std::path::PathBuf;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod backfill_lock;
 mod backfill_lyricsfiles;
 mod backfill_track_normalization;

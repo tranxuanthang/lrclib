@@ -9,6 +9,7 @@ Rust workspace for the LRCLIB API server.
 - HTTP runtime: `server/` crate (`lrclib-server`).
 - Storage: SQLite via `rusqlite` + `r2d2`.
 - HTTP: Axum.
+- Allocator: mimalloc in the root binary, with the C `malloc` override for bundled SQLite.
 
 Most behavior lives in `lrclib-core` and `lrclib-server`.
 
@@ -59,6 +60,14 @@ Background tasks:
 - recent lyrics counter: refreshes `last 10 minutes` publish count once/minute in `spawn_blocking`, so the indexed count query does not run on an async worker
 - daily `PRAGMA optimize`: waits 24h after startup (the startup `PRAGMA optimize=0x10002` already runs during `init_db`), then runs `PRAGMA optimize` once/day with `analysis_limit = 400` inside `spawn_blocking`, so maintenance does not block the async runtime or scan entire indexes on large databases
 - search indexer: dedicated OS thread that tails the `tracks` table into the Tantivy index (see Search Index)
+
+## Process Allocator
+
+The root `lrclib` binary installs mimalloc with `#[global_allocator]` and enables the crate's `override` feature. The override also defines the C `malloc` family used by bundled SQLite, so database allocations use mimalloc instead of the musl allocator on Alpine deployments. The allocator belongs to the binary crate; `lrclib-core` and `lrclib-server` do not select one for their embedders.
+
+- Confirm initialization with `MIMALLOC_VERBOSE=1 lrclib --version`.
+- Print allocator statistics at process exit with `MIMALLOC_SHOW_STATS=1`.
+- The `override` feature can interfere with sanitizers and Valgrind; use a scratch build without it for those tools.
 
 ## AppState
 
