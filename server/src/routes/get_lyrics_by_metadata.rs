@@ -181,38 +181,35 @@ async fn load_metadata_response(
 }
 
 fn create_response(track: SimpleTrack) -> TrackResponse {
-    let plain_lyrics = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.plain_lyrics.to_owned(),
-        None => None,
-    };
-
-    let synced_lyrics = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.synced_lyrics.to_owned(),
-        None => None,
-    };
-
-    let instrumental = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.instrumental.to_owned(),
-        None => false,
-    };
-
-    let has_word_sync = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.has_word_sync,
-        None => false,
-    };
-
-    let lyricsfile = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.lyricsfile.to_owned(),
-        None => None,
-    };
+    let SimpleTrack {
+        id,
+        name,
+        artist_name,
+        album_name,
+        duration,
+        last_lyrics,
+    } = track;
+    let (instrumental, has_word_sync, plain_lyrics, synced_lyrics, lyricsfile) =
+        match last_lyrics {
+            Some(lyrics) => (
+                lyrics.instrumental,
+                lyrics.has_word_sync,
+                lyrics.plain_lyrics,
+                lyrics.synced_lyrics,
+                lyrics.lyricsfile,
+            ),
+            None => (false, false, None, None, None),
+        };
 
     TrackResponse {
-        id: track.id,
-        name: track.name.to_owned(),
-        track_name: track.name.to_owned(),
-        artist_name: track.artist_name.to_owned(),
-        album_name: track.album_name.to_owned(),
-        duration: track.duration,
+        id,
+        // The public response exposes the track name twice; move the lyrics
+        // and metadata strings instead of cloning them.
+        name: name.clone(),
+        track_name: name,
+        artist_name,
+        album_name,
+        duration,
         instrumental,
         has_word_sync,
         plain_lyrics,
@@ -225,10 +222,41 @@ fn create_response(track: SimpleTrack) -> TrackResponse {
 mod tests {
     use super::*;
     use crate::db::init_db;
+    use crate::entities::lyrics::SimpleLyrics;
     use crate::repositories::track_repository;
     use std::path::PathBuf;
     use tokio::sync::Barrier;
     use uuid::Uuid;
+
+    #[test]
+    fn response_moves_lyrics_and_metadata_into_the_payload() {
+        let response = create_response(SimpleTrack {
+            id: 7,
+            name: Some("Song".to_owned()),
+            artist_name: Some("Artist".to_owned()),
+            album_name: Some("Album".to_owned()),
+            duration: Some(180.0),
+            last_lyrics: Some(SimpleLyrics {
+                plain_lyrics: Some("plain lyrics".to_owned()),
+                synced_lyrics: Some("synced lyrics".to_owned()),
+                lyricsfile: Some("lyricsfile".to_owned()),
+                instrumental: true,
+                has_word_sync: true,
+            }),
+        });
+
+        assert_eq!(response.id, 7);
+        assert_eq!(response.name.as_deref(), Some("Song"));
+        assert_eq!(response.track_name.as_deref(), Some("Song"));
+        assert_eq!(response.artist_name.as_deref(), Some("Artist"));
+        assert_eq!(response.album_name.as_deref(), Some("Album"));
+        assert_eq!(response.duration, Some(180.0));
+        assert!(response.instrumental);
+        assert!(response.has_word_sync);
+        assert_eq!(response.plain_lyrics.as_deref(), Some("plain lyrics"));
+        assert_eq!(response.synced_lyrics.as_deref(), Some("synced lyrics"));
+        assert_eq!(response.lyricsfile.as_deref(), Some("lyricsfile"));
+    }
 
     fn test_state() -> (Arc<AppState>, PathBuf) {
         let path = std::env::temp_dir().join(format!("lrclib-test-{}.sqlite3", Uuid::new_v4()));

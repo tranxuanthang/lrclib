@@ -49,38 +49,35 @@ pub async fn route(
 }
 
 fn create_response(track: SimpleTrack) -> TrackResponse {
-    let plain_lyrics = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.plain_lyrics.to_owned(),
-        None => None,
-    };
-
-    let synced_lyrics = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.synced_lyrics.to_owned(),
-        None => None,
-    };
-
-    let instrumental = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.instrumental.to_owned(),
-        None => false,
-    };
-
-    let has_word_sync = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.has_word_sync,
-        None => false,
-    };
-
-    let lyricsfile = match track.last_lyrics {
-        Some(ref lyrics) => lyrics.lyricsfile.to_owned(),
-        None => None,
-    };
+    let SimpleTrack {
+        id,
+        name,
+        artist_name,
+        album_name,
+        duration,
+        last_lyrics,
+    } = track;
+    let (instrumental, has_word_sync, plain_lyrics, synced_lyrics, lyricsfile) =
+        match last_lyrics {
+            Some(lyrics) => (
+                lyrics.instrumental,
+                lyrics.has_word_sync,
+                lyrics.plain_lyrics,
+                lyrics.synced_lyrics,
+                lyrics.lyricsfile,
+            ),
+            None => (false, false, None, None, None),
+        };
 
     TrackResponse {
-        id: track.id,
-        name: track.name.to_owned(),
-        track_name: track.name.to_owned(),
-        artist_name: track.artist_name.to_owned(),
-        album_name: track.album_name.to_owned(),
-        duration: track.duration,
+        id,
+        // The public response exposes the track name twice; move the lyrics
+        // and metadata strings instead of cloning them.
+        name: name.clone(),
+        track_name: name,
+        artist_name,
+        album_name,
+        duration,
         instrumental,
         has_word_sync,
         plain_lyrics,
