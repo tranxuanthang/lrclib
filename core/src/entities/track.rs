@@ -46,3 +46,28 @@ pub struct TrackSearchDoc {
     pub artist_name_lower: Option<String>,
     pub album_name_lower: Option<String>,
 }
+
+/// Track row whose normalized metadata is missing and can be recomputed from
+/// the raw values.
+#[derive(Debug)]
+pub struct TrackNormalizationCandidate {
+    pub id: i64,
+    pub name: Option<String>,
+    pub name_lower: Option<String>,
+    pub artist_name: Option<String>,
+    pub artist_name_lower: Option<String>,
+    pub album_name: Option<String>,
+    pub album_name_lower: Option<String>,
+}
+
+/// Guarded update produced from a `TrackNormalizationCandidate`.
+#[derive(Clone, Debug)]
+pub struct TrackNormalizationUpdate {
+    pub id: i64,
+    pub expected_name_lower: Option<String>,
+    pub expected_artist_name_lower: Option<String>,
+    pub expected_album_name_lower: Option<String>,
+    pub name_lower: Option<String>,
+    pub artist_name_lower: Option<String>,
+    pub album_name_lower: Option<String>,
+}

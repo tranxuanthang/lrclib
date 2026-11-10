@@ -296,6 +296,32 @@ mod tests {
         remove_test_database(&path);
     }
 
+    #[tokio::test]
+    async fn punctuation_only_metadata_is_found() {
+        let (state, path) = test_state();
+        let expected_track_id = {
+            let mut conn = state.pool.get().unwrap();
+            track_repository::add_one("?", "Outkast", "Stankonia", 89.0, &mut conn).unwrap()
+        };
+
+        let response = route(
+            Query(QueryParams {
+                track_name: "?".to_owned(),
+                artist_name: "Outkast".to_owned(),
+                album_name: Some("Stankonia".to_owned()),
+                duration: Some(89.0),
+            }),
+            State(state.clone()),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("metadata lookup failed"));
+
+        assert_eq!(response.0.id, expected_track_id);
+
+        drop(state);
+        remove_test_database(&path);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_missing_metadata_requests_share_one_load() {
         const REQUESTS: usize = 16;

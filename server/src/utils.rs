@@ -2,7 +2,7 @@ use ahash::RandomState as AHashRandomState;
 use moka::future::Cache;
 use sha2::{Digest, Sha256};
 
-pub(crate) use lrclib_core::text::process_param;
+pub(crate) use lrclib_core::text::{has_alphanumeric, process_param};
 
 // tokens
 

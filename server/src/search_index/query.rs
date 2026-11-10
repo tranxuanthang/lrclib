@@ -1,4 +1,4 @@
-use super::{SearchFields, TOKENIZER_NAME};
+use super::{tokenizable_text, SearchFields, TOKENIZER_NAME};
 use std::collections::HashSet;
 use tantivy::query::{BooleanQuery, BoostQuery, Occur, PhraseQuery, Query, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption};
@@ -229,8 +229,9 @@ fn tokenize(index: &Index, text: &str) -> Vec<String> {
         .get(TOKENIZER_NAME)
         .expect("search index tokenizer is registered at open time");
 
+    let tokenizable_text = tokenizable_text(text);
     let mut tokens = Vec::new();
-    let mut stream = analyzer.token_stream(text);
+    let mut stream = analyzer.token_stream(&tokenizable_text);
     while stream.advance() {
         tokens.push(stream.token().text.clone());
     }

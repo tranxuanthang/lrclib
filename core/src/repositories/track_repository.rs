@@ -1,11 +1,14 @@
 use crate::{
     entities::{
         lyrics::SimpleLyrics,
-        track::{SimpleTrack, SimpleTrackSummary, TrackSearchDoc},
+        track::{
+            SimpleTrack, SimpleTrackSummary, TrackNormalizationCandidate, TrackNormalizationUpdate,
+            TrackSearchDoc,
+        },
     },
     text::prepare_input,
 };
-use anyhow::Result;
+use anyhow::{ensure, Context, Result};
 use chrono::prelude::*;
 use indoc::indoc;
 use rusqlite::params_from_iter;
@@ -365,6 +368,126 @@ pub fn get_track_search_docs_after(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Returns tracks with missing normalized metadata in id order.
+///
+/// Candidates have at least one empty/NULL `*_lower` column and a non-blank
+/// raw value for that column. The OR conditions use the per-column indexes.
+pub fn get_track_normalization_candidates(
+    after_id: i64,
+    batch_size: usize,
+    conn: &mut Connection,
+) -> Result<Vec<TrackNormalizationCandidate>> {
+    ensure!(batch_size > 0, "batch size must be greater than zero");
+    let batch_size = i64::try_from(batch_size).context("batch size is too large")?;
+    let mut statement = conn.prepare_cached(
+        "
+        SELECT
+          id,
+          name,
+          name_lower,
+          artist_name,
+          artist_name_lower,
+          album_name,
+          album_name_lower
+        FROM
+          tracks
+        WHERE
+          id > ?
+          AND (
+            ((name_lower = '' OR name_lower IS NULL) AND name IS NOT NULL AND trim(name) <> '')
+            OR ((artist_name_lower = '' OR artist_name_lower IS NULL) AND artist_name IS NOT NULL AND trim(artist_name) <> '')
+            OR ((album_name_lower = '' OR album_name_lower IS NULL) AND album_name IS NOT NULL AND trim(album_name) <> '')
+          )
+        ORDER BY
+          id
+        LIMIT ?
+        ",
+    )?;
+    let mut rows = statement.query((after_id, batch_size))?;
+    let mut candidates = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id = row
+            .get("id")
+            .context("failed to read id for track normalization candidate")?;
+        candidates.push(TrackNormalizationCandidate {
+            id,
+            name: row
+                .get("name")
+                .with_context(|| format!("failed to read name for track {id}"))?,
+            name_lower: row
+                .get("name_lower")
+                .with_context(|| format!("failed to read name_lower for track {id}"))?,
+            artist_name: row
+                .get("artist_name")
+                .with_context(|| format!("failed to read artist_name for track {id}"))?,
+            artist_name_lower: row
+                .get("artist_name_lower")
+                .with_context(|| format!("failed to read artist_name_lower for track {id}"))?,
+            album_name: row
+                .get("album_name")
+                .with_context(|| format!("failed to read album_name for track {id}"))?,
+            album_name_lower: row
+                .get("album_name_lower")
+                .with_context(|| format!("failed to read album_name_lower for track {id}"))?,
+        });
+    }
+
+    Ok(candidates)
+}
+
+/// Applies guarded normalization updates, leaving timestamps untouched.
+///
+/// Each update only succeeds when all three current normalized values still
+/// match the values read for the candidate, so a concurrent edit cannot be
+/// overwritten.
+pub fn apply_track_normalization_backfill_batch(
+    updates: &[TrackNormalizationUpdate],
+    conn: &mut Connection,
+) -> Result<usize> {
+    if updates.is_empty() {
+        return Ok(0);
+    }
+
+    let tx = conn.transaction()?;
+    let updated = {
+        let mut statement = tx.prepare_cached(
+            "
+            UPDATE tracks
+            SET
+              name_lower = ?1,
+              artist_name_lower = ?2,
+              album_name_lower = ?3
+            WHERE
+              id = ?4
+              AND name_lower IS ?5
+              AND artist_name_lower IS ?6
+              AND album_name_lower IS ?7
+              AND (
+                name_lower = '' OR name_lower IS NULL
+                OR artist_name_lower = '' OR artist_name_lower IS NULL
+                OR album_name_lower = '' OR album_name_lower IS NULL
+              )
+            ",
+        )?;
+        let mut updated = 0usize;
+        for update in updates {
+            updated += statement.execute((
+                &update.name_lower,
+                &update.artist_name_lower,
+                &update.album_name_lower,
+                update.id,
+                &update.expected_name_lower,
+                &update.expected_artist_name_lower,
+                &update.expected_album_name_lower,
+            ))?;
+        }
+        updated
+    };
+    tx.commit()?;
+
+    Ok(updated)
+}
+
 pub fn add_one(
     track_name: &str,
     artist_name: &str,
@@ -517,6 +640,74 @@ mod tests {
         );
 
         assert!(get_tracks_by_ids(&[], &mut conn).unwrap().is_empty());
+
+        drop(conn);
+        drop(pool);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn track_normalization_backfill_finds_and_updates_empty_fields() {
+        let (pool, path) = test_pool();
+        let mut conn = pool.get().unwrap();
+        let track_id = add_one("?", "Outkast", "Stankonia", 89.0, &mut conn).unwrap();
+        conn.execute(
+            "UPDATE tracks SET name_lower = NULL WHERE id = ?",
+            [track_id],
+        )
+        .unwrap();
+
+        let candidates = get_track_normalization_candidates(0, 10, &mut conn).unwrap();
+        assert_eq!(candidates.len(), 1);
+        let candidate = &candidates[0];
+        assert_eq!(candidate.name_lower, None);
+
+        let updated = apply_track_normalization_backfill_batch(
+            &[TrackNormalizationUpdate {
+                id: candidate.id,
+                expected_name_lower: candidate.name_lower.clone(),
+                expected_artist_name_lower: candidate.artist_name_lower.clone(),
+                expected_album_name_lower: candidate.album_name_lower.clone(),
+                name_lower: Some("?".to_owned()),
+                artist_name_lower: Some("outkast".to_owned()),
+                album_name_lower: Some("stankonia".to_owned()),
+            }],
+            &mut conn,
+        )
+        .unwrap();
+        assert_eq!(updated, 1);
+        assert!(get_track_normalization_candidates(0, 10, &mut conn)
+            .unwrap()
+            .is_empty());
+
+        let normalized: (String, String, String) = conn
+            .query_row(
+                "SELECT name_lower, artist_name_lower, album_name_lower FROM tracks WHERE id = ?",
+                [track_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            normalized,
+            ("?".to_owned(), "outkast".to_owned(), "stankonia".to_owned())
+        );
+
+        drop(conn);
+        drop(pool);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn punctuation_only_metadata_round_trips() {
+        let (pool, path) = test_pool();
+        let mut conn = pool.get().unwrap();
+        let track_id = add_one("?", "Outkast", "Stankonia", 89.0, &mut conn).unwrap();
+
+        let track = get_track_by_metadata("?", "outkast", Some("stankonia"), None, &mut conn)
+            .unwrap()
+            .expect("punctuation-only track should be found");
+
+        assert_eq!(track.id, track_id);
 
         drop(conn);
         drop(pool);

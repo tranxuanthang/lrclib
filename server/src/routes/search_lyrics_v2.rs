@@ -3,6 +3,7 @@ use crate::{
     errors::{ApiError, OverloadedError},
     metrics::MonitoredRoute,
     repositories::track_repository::get_track_summaries_by_ids,
+    utils::has_alphanumeric,
     utils::process_param,
     AppState,
 };
@@ -49,15 +50,22 @@ pub async fn route(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<TrackSummaryResponse>>, ApiError> {
     let q = process_param(params.q.as_deref());
+    let track_name = process_param(params.track_name.as_deref());
+    let artist_name = process_param(params.artist_name.as_deref());
+    let album_name = process_param(params.album_name.as_deref());
+
     // Keyword search ignores all structured constraints in the query builder.
-    let (track_name, artist_name, album_name) = if q.is_some() {
-        (None, None, None)
+    // A punctuation-only q used to normalize to None; when structured
+    // parameters are present, keep that behavior instead of shadowing them
+    // with a keyword search that can only look for punctuation.
+    let has_structured = track_name.is_some() || artist_name.is_some() || album_name.is_some();
+    let use_keyword = q
+        .as_deref()
+        .is_some_and(|q| !has_structured || has_alphanumeric(q));
+    let (q, track_name, artist_name, album_name) = if use_keyword {
+        (q, None, None, None)
     } else {
-        (
-            process_param(params.track_name.as_deref()),
-            process_param(params.artist_name.as_deref()),
-            process_param(params.album_name.as_deref()),
-        )
+        (None, track_name, artist_name, album_name)
     };
 
     let cache_key = build_cache_key(
@@ -360,6 +368,35 @@ mod tests {
         assert!(value.get("plainLyrics").is_none());
         assert!(value.get("syncedLyrics").is_none());
         assert!(value.get("lyricsfile").is_none());
+
+        test.cleanup();
+    }
+
+    #[tokio::test]
+    async fn punctuation_only_summary_search_is_supported() {
+        let test = test_state_with_ready_search_index(|conn| {
+            track_repository::add_one("?", "Outkast", "Stankonia", 89.0, conn).unwrap();
+        })
+        .await;
+
+        for (q, track_name, artist_name) in
+            [(Some("?"), None, None), (None, Some("?"), Some("Outkast"))]
+        {
+            let response = route(
+                Query(QueryParams {
+                    q: q.map(str::to_owned),
+                    track_name: track_name.map(str::to_owned),
+                    artist_name: artist_name.map(str::to_owned),
+                    album_name: None,
+                }),
+                State(Arc::clone(&test.state)),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("v2 search failed"));
+
+            assert_eq!(response.0.len(), 1);
+            assert_eq!(response.0[0].track_name.as_deref(), Some("?"));
+        }
 
         test.cleanup();
     }

@@ -3,10 +3,12 @@ mod query;
 
 pub use indexer::{spawn_indexer, IndexerConfig, IndexerHandle};
 
-use crate::entities::track::TrackSearchDoc;
+use crate::{entities::track::TrackSearchDoc, utils::has_alphanumeric};
 use anyhow::{Context, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
+use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -22,8 +24,12 @@ pub const SEARCH_RESULT_LIMIT: usize = 20;
 
 /// Bump this when the schema or tokenizer changes; a mismatch triggers a full
 /// rebuild of the index from the `tracks` table.
-const INDEX_FORMAT_VERSION: u32 = 1;
+const INDEX_FORMAT_VERSION: u32 = 2;
 const VERSION_FILE_NAME: &str = "lrclib_index_version";
+
+/// Prefix for the synthetic token used when a normalized value contains no
+/// alphanumeric characters, such as a track literally named `?`.
+const LITERAL_TOKEN_PREFIX: &str = "lrclibspecial";
 
 /// Values indexed by this tokenizer are already normalized by
 /// `lrclib_core::text::prepare_input` (lowercased, punctuation stripped, diacritics
@@ -302,6 +308,26 @@ fn ensure_safe_to_recreate(dir: &Path) -> Result<()> {
     )
 }
 
+/// Returns text that the search tokenizer can index and query consistently.
+///
+/// Normalized values already contain alphanumeric tokens, so they pass through
+/// unchanged. A value with no alphanumeric characters (for example `?` or
+/// `!!!`) would otherwise produce no tokens and become unsearchable; encode it
+/// as one deterministic synthetic token instead. Indexing and querying must use
+/// the same function so their tokens match.
+pub(crate) fn tokenizable_text(value: &str) -> Cow<'_, str> {
+    if value.is_empty() || has_alphanumeric(value) {
+        return Cow::Borrowed(value);
+    }
+
+    let mut token = String::with_capacity(LITERAL_TOKEN_PREFIX.len() + value.len() * 2);
+    token.push_str(LITERAL_TOKEN_PREFIX);
+    for byte in value.as_bytes() {
+        write!(token, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Cow::Owned(token)
+}
+
 pub(crate) fn build_document(fields: &SearchFields, track: &TrackSearchDoc) -> TantivyDocument {
     let mut document = TantivyDocument::default();
     document.add_i64(fields.track_id, track.id);
@@ -313,7 +339,7 @@ pub(crate) fn build_document(fields: &SearchFields, track: &TrackSearchDoc) -> T
     ] {
         if let Some(value) = value {
             if !value.is_empty() {
-                document.add_text(field, value);
+                document.add_text(field, tokenizable_text(value).as_ref());
             }
         }
     }
@@ -398,6 +424,37 @@ mod tests {
                 None
             ),
             vec![7]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn punctuation_only_names_are_searchable() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+        seed(
+            &search_index,
+            &[
+                doc(1, "?", "outkast", "stankonia"),
+                doc(2, "!!!", "artist", "album"),
+            ],
+        );
+
+        assert_eq!(search(&search_index, Some("?"), None, None, None), vec![1]);
+        assert_eq!(
+            search(
+                &search_index,
+                None,
+                Some("?"),
+                Some("outkast"),
+                Some("stankonia")
+            ),
+            vec![1]
+        );
+        assert_eq!(
+            search(&search_index, Some("!!!"), None, None, None),
+            vec![2]
         );
 
         let _ = std::fs::remove_dir_all(&dir);

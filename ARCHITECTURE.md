@@ -19,6 +19,7 @@ This is the public self-hosted product. The workspace intentionally does not inc
 - `src/main.rs`: CLI dispatch for `serve` and one-shot maintenance commands.
 - `src/backfill_lock.rs`: shared exclusive process lock keyed by database identity, used by the maintenance backfills.
 - `src/backfill_lyricsfiles.rs`: resumable Lyricsfile backfill orchestration, throttling, and dry-run reporting.
+- `src/backfill_track_normalization.rs`: recomputes empty/NULL normalized track metadata from raw values, with preview, confirmation, dry-run, and guarded batch writes.
 - `src/backfill_word_sync.rs`: idempotent word-sync backfill sweep with `instr` prefiltering, dry-run sampling, progress reporting, and row limits.
 - `core/src/lib.rs`: thin crate facade that declares the persistence/domain modules.
 - `core/src/db.rs`: SQLite pool setup, WAL/PRAGMAs, and embedded migrations.
@@ -175,6 +176,13 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 - `backfill-lyricsfiles` also writes `has_word_sync` for its candidates (derived for preserved Lyricsfiles, `false` for generated ones), so the two maintenance commands can run in either order.
 - Defaults are 500 rows per pass and 50ms between write batches; `--sleep-ms 0` is intended for an offline run. `--dry-run` opens SQLite read-only, never applies migrations or takes the writer lock, and reports the sample scan/confirm counts.
 
+`lrclib backfill-track-normalization --database <FILE>` recomputes empty or NULL `name_lower`, `artist_name_lower`, and `album_name_lower` values from the raw track metadata.
+
+- Candidates are selected in id order where at least one normalized field is empty/NULL and the corresponding raw value is non-blank.
+- The command previews planned changes, prompts for confirmation unless `--yes` is supplied, and leaves `created_at` / `updated_at` unchanged. `--dry-run` opens SQLite read-only and never takes the writer lock.
+- Writes use a guarded compare-and-set against all three normalized values, so concurrent edits are not overwritten and remain eligible for a later run.
+- Restart the server after a write run so the version-2 search index rebuild picks up rows below the indexer cursor. If the server already rebuilt the version-2 index before the backfill, remove `lrclib_index_version` from the index directory to force another rebuild.
+
 ## Data Model
 
 Core schema is in `core/migrations/`.
@@ -189,7 +197,7 @@ Important DB behavior:
 
 - `tracks.last_lyrics_id` is maintained by an `AFTER INSERT ON lyrics` trigger.
 - FTS rows are maintained by insert/update/delete triggers on `tracks`.
-- track uniqueness is enforced on normalized `(name_lower, artist_name_lower, album_name_lower, duration)`.
+- track uniqueness is enforced on normalized `(name_lower, artist_name_lower, album_name_lower, duration)`. Punctuation-only values keep their trimmed, lowercased literal text instead of normalizing to an empty string.
 - the uniqueness constraint's autoindex covers full metadata lookups; `idx_tracks_metadata_no_album` separately supports metadata lookups that omit the album but include duration.
 - DB opens in WAL mode with tuned PRAGMAs in `core/src/db.rs`; connection-local PRAGMAs and a busy timeout are applied to every pooled connection. Startup logs the linked SQLite version plus the effective and compiled maximum mmap sizes, with all SQLite compile options available at debug level. `LRCLIB_MMAP_SIZE` and `LRCLIB_CACHE_SIZE` override the mmap and suggested page-cache limits, while `LRCLIB_POOL_MAX_SIZE` sets the r2d2 connection limit (default 16).
 - `LRCLIB_MAX_CONCURRENT_LOADS` (default 32) and `LRCLIB_LOAD_QUEUE_MS` (default 250) control the blocking-load admission. `LRCLIB_MAX_BLOCKING_THREADS` optionally caps the tokio blocking thread pool (only when explicitly set; default follows tokio). When permitted loads are exhausted, `/api/get`, `/api/get/:track_id`, and `/api/search` return `503 + Retry-After: 1`.
@@ -210,8 +218,9 @@ Current lyrics API responses remain backward-compatible:
 - The indexer is a dedicated OS thread that polls `tracks` for `id > cursor` (default every 2s, batches of 10k). This is race-free because `tracks.id` is AUTOINCREMENT-monotonic and the indexed name columns are immutable after insert; there is no hook in the publish path.
 - The cursor (last indexed track id) is stored as the Tantivy commit payload, so it is atomic with each commit. Restarts replay `id > cursor`; crashes lose only uncommitted work that the replay re-indexes.
 - `SearchIndex::is_ready()` turns true once the indexer has caught up. Search requests fail until then; missing/corrupt/version-mismatched indexes rebuild in the background while non-search routes continue serving.
-- The index format version lives in `lrclib_index_version` inside the index dir; bump `INDEX_FORMAT_VERSION` when the schema/tokenizer changes to force a rebuild. Recreation refuses to wipe directories that do not look like a search index.
-- Query semantics: `q` = AND of terms across the three columns. Structured `track_name` and `album_name` are per-column phrase queries; `artist_name` requires every token in the artist column in any order and boosts the exact phrase. Artist connector words (`feat`, `ft`, `featuring`) are optional only between other artist tokens; leading, trailing, and all-connector occurrences stay literal. Inputs are expected to be normalized by `lrclib_core::text::prepare_input`.
+- The index format version lives in `lrclib_index_version` inside the index dir; bump `INDEX_FORMAT_VERSION` when the schema/tokenizer changes to force a rebuild. The current format is version 2. Recreation refuses to wipe directories that do not look like a search index.
+- Values with no alphanumeric characters (for example a track named `?`) are indexed and queried through one deterministic synthetic token, so punctuation-only metadata remains searchable without changing ordinary tokenization.
+- Query semantics: `q` = AND of terms across the three columns. Structured `track_name` and `album_name` are per-column phrase queries; `artist_name` requires every token in the artist column in any order and boosts the exact phrase. Artist connector words (`feat`, `ft`, `featuring`) are optional only between other artist tokens; leading, trailing, and all-connector occurrences stay literal. A punctuation-only `q` is a keyword query only when no structured parameters are supplied; with structured parameters it remains ignored, preserving the previous precedence behavior. Inputs are expected to be normalized by `lrclib_core::text::prepare_input`.
 - Tantivy emits its own `tracing` logs; use e.g. `LRCLIB_LOG=info,tantivy=warn` to quiet them.
 
 ## Matching Rules
@@ -219,7 +228,7 @@ Current lyrics API responses remain backward-compatible:
 Track matching is intentionally fuzzy but narrow:
 
 - names are normalized by `lrclib_core::text::prepare_input`
-- punctuation is mostly removed/collapsed
+- punctuation is mostly removed/collapsed, but punctuation-only values keep their trimmed, lowercased literal text and use a synthetic search token
 - comparisons are lowercase
 - metadata duration matching uses about +/-2 seconds
 - `/api/get` prefers tracks whose current lyrics include synced lyrics
