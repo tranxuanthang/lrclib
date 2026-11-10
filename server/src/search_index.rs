@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tantivy::collector::TopDocs;
+use tantivy::columnar::Column;
 use tantivy::schema::{
     Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, FAST, INDEXED,
 };
@@ -162,13 +163,31 @@ impl SearchIndex {
             &TopDocs::with_limit(SEARCH_RESULT_LIMIT).order_by_score(),
         )?;
 
+        // Opening the track id column is not a cheap handle lookup: `i64()`
+        // resolves the column through the segment's column dictionary and
+        // deserializes its codec on every call. Track ids are monotonic, so
+        // Tantivy stores them with the blockwise-linear codec, whose open cost
+        // grows with the segment's document count. Reuse one handle per
+        // segment rather than reopening it for every result.
+        let mut track_id_columns: Vec<Option<Column<i64>>> =
+            vec![None; searcher.segment_readers().len()];
+
         let mut track_ids = Vec::with_capacity(top_docs.len());
         for (_score, doc_address) in top_docs {
-            let track_id_column = searcher
-                .segment_reader(doc_address.segment_ord)
-                .fast_fields()
-                .i64(TRACK_ID_FIELD)?;
-            if let Some(track_id) = track_id_column.first(doc_address.doc_id) {
+            let track_id_column = &mut track_id_columns[doc_address.segment_ord as usize];
+            if track_id_column.is_none() {
+                *track_id_column = Some(
+                    searcher
+                        .segment_reader(doc_address.segment_ord)
+                        .fast_fields()
+                        .i64(TRACK_ID_FIELD)?,
+                );
+            }
+            if let Some(track_id) = track_id_column
+                .as_ref()
+                .expect("track id column was opened above")
+                .first(doc_address.doc_id)
+            {
                 track_ids.push(track_id);
             }
         }
@@ -382,6 +401,25 @@ mod tests {
             .expect("failed to reload reader");
     }
 
+    /// Commits each batch separately so the index has one segment per batch.
+    fn seed_segments(search_index: &SearchIndex, batches: &[&[TrackSearchDoc]]) {
+        let mut writer = search_index
+            .index()
+            .writer::<TantivyDocument>(32 * 1024 * 1024)
+            .expect("failed to create test writer");
+        for batch in batches {
+            for track in *batch {
+                writer
+                    .add_document(build_document(search_index.fields(), track))
+                    .expect("failed to add test document");
+            }
+            writer.commit().expect("failed to commit test documents");
+        }
+        search_index
+            .reload_reader()
+            .expect("failed to reload reader");
+    }
+
     fn search(
         search_index: &SearchIndex,
         q: Option<&str>,
@@ -456,6 +494,37 @@ mod tests {
             search(&search_index, Some("!!!"), None, None, None),
             vec![2]
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_reads_track_ids_from_every_matching_segment() {
+        let dir = test_dir();
+        let search_index = SearchIndex::open_or_create(&dir).unwrap();
+
+        let first_segment: Vec<TrackSearchDoc> = (1..=5)
+            .map(|id| doc(id, "hello world", "artist", "album"))
+            .collect();
+        let second_segment: Vec<TrackSearchDoc> = (6..=10)
+            .map(|id| doc(id, "hello world", "artist", "album"))
+            .collect();
+        seed_segments(&search_index, &[&first_segment, &second_segment]);
+
+        let segment_count = search_index.reader.searcher().segment_readers().len();
+        assert!(
+            segment_count >= 2,
+            "expected several segments, got {segment_count}"
+        );
+
+        // With every document matching, the top window must contain the ids of
+        // both segments; reusing one column handle across segments, or only
+        // opening the first segment's column, would drop or corrupt them.
+        let all = search(&search_index, Some("hello"), None, None, None);
+        assert_eq!(all.len(), 10);
+        let mut sorted = all;
+        sorted.sort_unstable();
+        assert_eq!(sorted, (1..=10).collect::<Vec<_>>());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
