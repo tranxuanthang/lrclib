@@ -48,6 +48,31 @@ pub(crate) fn spawn_metrics_reporter(state: Arc<AppState>) {
                 "Search metrics for the last minute"
             );
             tracing::info!(
+                event = "search_v2_metrics",
+                interval_seconds = 60,
+                requests = metrics.search_v2.requests,
+                cache_hits = metrics.search_v2.cache_hits,
+                cache_misses = metrics.search_v2.cache_misses,
+                failures = metrics.search_v2.failures,
+                overloads = metrics.search_v2.overloads,
+                route_latency_p50_ms = metrics.search_v2.route_latency_p50_ms,
+                route_latency_p95_ms = metrics.search_v2.route_latency_p95_ms,
+                route_latency_p99_ms = metrics.search_v2.route_latency_p99_ms,
+                blocking_wait_latency_p50_ms = metrics.search_v2.blocking_wait_latency_p50_ms,
+                blocking_wait_latency_p95_ms = metrics.search_v2.blocking_wait_latency_p95_ms,
+                blocking_wait_latency_p99_ms = metrics.search_v2.blocking_wait_latency_p99_ms,
+                tantivy_latency_p50_ms = metrics.search_v2.tantivy_latency_p50_ms,
+                tantivy_latency_p95_ms = metrics.search_v2.tantivy_latency_p95_ms,
+                tantivy_latency_p99_ms = metrics.search_v2.tantivy_latency_p99_ms,
+                db_pool_wait_latency_p50_ms = metrics.search_v2.db_pool_wait_latency_p50_ms,
+                db_pool_wait_latency_p95_ms = metrics.search_v2.db_pool_wait_latency_p95_ms,
+                db_pool_wait_latency_p99_ms = metrics.search_v2.db_pool_wait_latency_p99_ms,
+                sql_latency_p50_ms = metrics.search_v2.sql_latency_p50_ms,
+                sql_latency_p95_ms = metrics.search_v2.sql_latency_p95_ms,
+                sql_latency_p99_ms = metrics.search_v2.sql_latency_p99_ms,
+                "Search v2 metrics for the last minute"
+            );
+            tracing::info!(
                 event = "get_metadata_metrics",
                 interval_seconds = 60,
                 requests = metrics.get_metadata.requests,

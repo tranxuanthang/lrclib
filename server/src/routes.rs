@@ -4,3 +4,4 @@ pub mod get_lyrics_by_track_id;
 pub mod publish_lyrics;
 pub mod request_challenge;
 pub mod search_lyrics;
+pub mod search_lyrics_v2;

@@ -10,6 +10,7 @@ const MAX_RESPONSE_LATENCY_US: u64 = 60 * 1_000_000;
 #[derive(Clone, Copy)]
 pub(crate) enum MonitoredRoute {
     Search,
+    SearchV2,
     GetMetadata,
 }
 
@@ -18,6 +19,7 @@ pub(crate) struct HttpMetrics {
     responses_5xx: AtomicU64,
     response_latency_us: Mutex<Histogram<u64>>,
     search: EndpointMetrics,
+    search_v2: EndpointMetrics,
     get_metadata: EndpointMetrics,
 }
 
@@ -64,6 +66,7 @@ pub(crate) struct HttpMetricsSnapshot {
     pub response_latency_p95_ms: f64,
     pub response_latency_p99_ms: f64,
     pub search: EndpointMetricsSnapshot,
+    pub search_v2: EndpointMetricsSnapshot,
     pub get_metadata: EndpointMetricsSnapshot,
 }
 
@@ -77,6 +80,7 @@ impl HttpMetrics {
                     .expect("valid response latency histogram bounds"),
             ),
             search: EndpointMetrics::new(),
+            search_v2: EndpointMetrics::new(),
             get_metadata: EndpointMetrics::new(),
         }
     }
@@ -129,7 +133,11 @@ impl HttpMetrics {
     }
 
     pub(crate) fn record_tantivy_latency(&self, latency: Duration) {
-        record_latency(&self.search.tantivy_latency_us, latency);
+        self.record_tantivy_latency_for(MonitoredRoute::Search, latency);
+    }
+
+    pub(crate) fn record_tantivy_latency_for(&self, route: MonitoredRoute, latency: Duration) {
+        record_latency(&self.endpoint(route).tantivy_latency_us, latency);
     }
 
     pub(crate) fn record_blocking_wait_latency(&self, route: MonitoredRoute, latency: Duration) {
@@ -169,6 +177,7 @@ impl HttpMetrics {
             response_latency_p95_ms: to_ms(0.95),
             response_latency_p99_ms: to_ms(0.99),
             search: self.search.take_snapshot(),
+            search_v2: self.search_v2.take_snapshot(),
             get_metadata: self.get_metadata.take_snapshot(),
         };
         latency.reset();
@@ -178,6 +187,7 @@ impl HttpMetrics {
     fn endpoint(&self, route: MonitoredRoute) -> &EndpointMetrics {
         match route {
             MonitoredRoute::Search => &self.search,
+            MonitoredRoute::SearchV2 => &self.search_v2,
             MonitoredRoute::GetMetadata => &self.get_metadata,
         }
     }

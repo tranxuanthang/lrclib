@@ -1,7 +1,7 @@
 use crate::{
     entities::{
         lyrics::SimpleLyrics,
-        track::{SimpleTrack, TrackSearchDoc},
+        track::{SimpleTrack, SimpleTrackSummary, TrackSearchDoc},
     },
     text::prepare_input,
 };
@@ -260,6 +260,72 @@ pub fn get_tracks_by_ids(track_ids: &[i64], conn: &mut Connection) -> Result<Vec
     tracks.sort_by_key(|track| rank_by_id.get(&track.id).copied().unwrap_or(usize::MAX));
 
     Ok(tracks)
+}
+
+/// Fetches track metadata and lyrics availability flags by id, without
+/// reading the lyrics text. The v2 search path uses this to keep result
+/// payloads and SQL rows small.
+pub fn get_track_summaries_by_ids(
+    track_ids: &[i64],
+    conn: &mut Connection,
+) -> Result<Vec<SimpleTrackSummary>> {
+    if track_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = vec!["?"; track_ids.len()].join(", ");
+    let query = format!(
+        "SELECT
+      tracks.id,
+      tracks.name,
+      tracks.artist_name,
+      tracks.album_name,
+      tracks.duration,
+      lyrics.instrumental,
+      lyrics.has_word_sync,
+      lyrics.has_plain_lyrics,
+      lyrics.has_synced_lyrics,
+      lyrics.has_lyricsfile
+    FROM
+      tracks
+      LEFT JOIN lyrics ON tracks.last_lyrics_id = lyrics.id
+    WHERE
+      tracks.id IN ({placeholders})"
+    );
+
+    let mut statement = conn.prepare_cached(&query)?;
+    let rows = statement.query_map(params_from_iter(track_ids.iter()), |row| {
+        Ok(SimpleTrackSummary {
+            id: row.get("id")?,
+            name: row.get("name")?,
+            artist_name: row.get("artist_name")?,
+            album_name: row.get("album_name")?,
+            duration: row.get("duration")?,
+            instrumental: row.get::<_, Option<bool>>("instrumental")?.unwrap_or(false),
+            has_word_sync: row
+                .get::<_, Option<bool>>("has_word_sync")?
+                .unwrap_or(false),
+            has_plain_lyrics: row
+                .get::<_, Option<bool>>("has_plain_lyrics")?
+                .unwrap_or(false),
+            has_synced_lyrics: row
+                .get::<_, Option<bool>>("has_synced_lyrics")?
+                .unwrap_or(false),
+            has_lyricsfile: row
+                .get::<_, Option<bool>>("has_lyricsfile")?
+                .unwrap_or(false),
+        })
+    })?;
+    let mut summaries = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let rank_by_id: HashMap<i64, usize> = track_ids
+        .iter()
+        .enumerate()
+        .map(|(rank, track_id)| (*track_id, rank))
+        .collect();
+    summaries.sort_by_key(|track| rank_by_id.get(&track.id).copied().unwrap_or(usize::MAX));
+
+    Ok(summaries)
 }
 
 /// Returns tracks with `id > after_id` in ascending id order, limited to `limit` rows.

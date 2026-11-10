@@ -68,10 +68,11 @@ Background tasks:
 - `challenge_cache`: proof-of-work publish challenges, TTL 5 min.
 - `get_metadata_cache`: `Cache<String, Option<TrackResponse>>` with 24h TTL / 4h idle; stores both hits and misses. Uses `try_get_with` for coalescing concurrent requests.
 - `search_cache`: cached `/api/search` responses, 24h TTL, 4h idle timeout.
-- `load_permits` / `load_queue_timeout`: bounded admission for blocking-load tasks; configurable via `LRCLIB_MAX_CONCURRENT_LOADS` (default 32) and `LRCLIB_LOAD_QUEUE_MS` (default 250). `GET /api/search`, `GET /api/get`, and `GET /api/get/:track_id` return `503 + Retry-After: 1` when the load budget is exhausted.
+- `search_v2_cache`: cached `/api/v2/search` summary responses, 24h TTL, 4h idle timeout.
+- `load_permits` / `load_queue_timeout`: bounded admission for blocking-load tasks; configurable via `LRCLIB_MAX_CONCURRENT_LOADS` (default 32) and `LRCLIB_LOAD_QUEUE_MS` (default 250). `GET /api/search`, `GET /api/v2/search`, `GET /api/get`, and `GET /api/get/:track_id` return `503 + Retry-After: 1` when the load budget is exhausted.
 
 - Moka caches use AHash for lower-overhead in-memory key hashing.
-- `http_metrics`: aggregate HTTP metrics plus `/api/search` and metadata `/api/get` request, cache hit/miss, failure, route-latency, and backend-stage histograms; the reporter snapshots and resets these once per minute.
+- `http_metrics`: aggregate HTTP metrics plus `/api/search`, `/api/v2/search`, and metadata `/api/get` request, cache hit/miss, failure, route-latency, and backend-stage histograms; the reporter snapshots and resets these once per minute.
 - `recent_lyrics_count`: recent publish-volume metric used to calculate challenge difficulty.
 
 ## Layering
@@ -92,7 +93,8 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 
 - `GET /api/get`: lookup by metadata.
 - `GET /api/get/:track_id`: lookup by track id.
-- `GET /api/search`: Tantivy-backed search.
+- `GET /api/search`: Tantivy-backed search with full lyrics text.
+- `GET /api/v2/search`: Tantivy-backed search summary without lyrics text.
 - `POST /api/request-challenge`: create proof-of-work challenge.
 - `POST /api/publish`: publish lyrics using challenge solution.
 - `POST /api/flag`: flag current lyrics for a track.
@@ -120,6 +122,14 @@ Routes are mounted under `/api` in `server/src/router.rs`.
 - Cache-miss and background-refresh searches run through a bounded admission queue on `spawn_blocking`; cache hits remain fully async. The admission semaphore is sized by `LRCLIB_MAX_CONCURRENT_LOADS` (default 32). When saturated, new loads wait up to `LRCLIB_LOAD_QUEUE_MS` ms (default 250, 0 = strict shed) before returning `503 Service Unavailable` + `Retry-After: 1`.
 
 - Once-per-minute metrics report route latency plus `spawn_blocking` wait, Tantivy query, database-pool wait, and SQLite result-fetch latency p50/p95/p99, along with requests, cache hits/misses, and 5xx failures. Backend-stage histograms contain actual coalesced loader executions, not every request that observed an initial cache miss.
+
+### `GET /api/v2/search`
+
+- Uses the same normalized query parameters and Tantivy ranking as `/api/search`.
+- Uses `search_v2_cache`; cache keys are versioned as `search:v5`.
+- On a cache miss, ranked ids are joined to track metadata and lyrics availability flags through `track_repository::get_track_summaries_by_ids`; lyrics text columns are never selected or serialized.
+- The response contains `id`, `trackName`, `artistName`, `albumName`, `duration`, `instrumental`, `hasWordSync`, `hasPlainLyrics`, `hasSyncedLyrics`, and `hasLyricsfile`.
+- Shares the `/api/search` load-admission budget and returns `503 Service Unavailable` with `Retry-After: 1` when saturated.
 
 ### `POST /api/request-challenge`
 
@@ -201,14 +211,14 @@ Current lyrics API responses remain backward-compatible:
 - The cursor (last indexed track id) is stored as the Tantivy commit payload, so it is atomic with each commit. Restarts replay `id > cursor`; crashes lose only uncommitted work that the replay re-indexes.
 - `SearchIndex::is_ready()` turns true once the indexer has caught up. Search requests fail until then; missing/corrupt/version-mismatched indexes rebuild in the background while non-search routes continue serving.
 - The index format version lives in `lrclib_index_version` inside the index dir; bump `INDEX_FORMAT_VERSION` when the schema/tokenizer changes to force a rebuild. Recreation refuses to wipe directories that do not look like a search index.
-- Query semantics: `q` = AND of terms across the three columns; structured params = per-column phrase queries. Inputs are expected to be normalized by `utils::prepare_input`.
+- Query semantics: `q` = AND of terms across the three columns; structured params = per-column phrase queries. Inputs are expected to be normalized by `lrclib_core::text::prepare_input`.
 - Tantivy emits its own `tracing` logs; use e.g. `LRCLIB_LOG=info,tantivy=warn` to quiet them.
 
 ## Matching Rules
 
 Track matching is intentionally fuzzy but narrow:
 
-- names are normalized by `utils::prepare_input`
+- names are normalized by `lrclib_core::text::prepare_input`
 - punctuation is mostly removed/collapsed
 - comparisons are lowercase
 - metadata duration matching uses about +/-2 seconds

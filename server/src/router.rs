@@ -2,7 +2,7 @@ use crate::{
     metrics::MonitoredRoute,
     routes::{
         flag_lyrics, get_lyrics_by_metadata, get_lyrics_by_track_id, publish_lyrics,
-        request_challenge, search_lyrics,
+        request_challenge, search_lyrics, search_lyrics_v2,
     },
     AppState,
 };
@@ -45,6 +45,13 @@ pub(crate) fn build_router(state: Arc<AppState>) -> Router {
             get(search_lyrics::route).layer(middleware::from_fn_with_state(
                 Arc::clone(&state),
                 record_search_metrics,
+            )),
+        )
+        .route(
+            "/v2/search",
+            get(search_lyrics_v2::route).layer(middleware::from_fn_with_state(
+                Arc::clone(&state),
+                record_search_v2_metrics,
             )),
         )
         .route("/request-challenge", post(request_challenge::route))
@@ -110,6 +117,14 @@ async fn record_search_metrics(
     next: Next,
 ) -> Response {
     record_endpoint_metrics(state, MonitoredRoute::Search, request, next).await
+}
+
+async fn record_search_v2_metrics(
+    State(state): State<Arc<AppState>>,
+    request: AxumRequest,
+    next: Next,
+) -> Response {
+    record_endpoint_metrics(state, MonitoredRoute::SearchV2, request, next).await
 }
 
 async fn record_get_metadata_metrics(

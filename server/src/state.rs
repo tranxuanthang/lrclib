@@ -4,6 +4,7 @@ use crate::{
     routes::{
         get_lyrics_by_metadata::TrackResponse as GetLyricsByMetadataResponse,
         search_lyrics::CachedResult,
+        search_lyrics_v2::CachedResult as SearchV2CachedResult,
     },
     search_index::SearchIndex,
 };
@@ -29,6 +30,7 @@ pub struct AppState {
     pub(crate) challenge_cache: Cache<String, String>,
     pub(crate) get_metadata_cache: Cache<String, Option<GetLyricsByMetadataResponse>>,
     pub(crate) search_cache: Cache<String, CachedResult>,
+    pub(crate) search_v2_cache: Cache<String, SearchV2CachedResult>,
 
     #[cfg(test)]
     pub(crate) search_load_count: AtomicUsize,
@@ -95,6 +97,11 @@ pub(crate) fn build_app_state(
             .max_capacity(3000000)
             .build_with_hasher(AHashRandomState::new()),
         search_cache: MokaCache::builder()
+            .time_to_live(Duration::from_secs(60 * 60 * 24))
+            .time_to_idle(Duration::from_secs(60 * 60 * 4))
+            .max_capacity(1000000)
+            .build_with_hasher(AHashRandomState::new()),
+        search_v2_cache: MokaCache::builder()
             .time_to_live(Duration::from_secs(60 * 60 * 24))
             .time_to_idle(Duration::from_secs(60 * 60 * 4))
             .max_capacity(1000000)
